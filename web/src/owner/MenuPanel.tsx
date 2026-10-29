@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { FormEvent } from 'react'
-import { api, friendlyError } from '../api'
-import type { Markup, MenuData, MenuItem, MenuOption, MenuType, OptionGroup, Shop } from '../api'
+import type { ChangeEvent, FormEvent } from 'react'
+import { api, deleteMenuImage, errorCode, friendlyError, getMediaUsage, mediaUrl, uploadMenuImage } from '../api'
+import type { Markup, MediaUsage, MenuData, MenuItem, MenuOption, MenuType, OptionGroup, Shop } from '../api'
+import { prepareMenuImage } from '../imageResize'
 
 type Channel = 'grab' | 'lineman' | 'foodpanda'
 
@@ -48,6 +49,22 @@ function priceLine(it: MenuItem): string {
   if (it.lineman_price !== null) extras.push(`LINE MAN ${fmtBaht(it.lineman_price)}`)
   if (it.foodpanda_price !== null) extras.push(`Foodpanda ${fmtBaht(it.foodpanda_price)}`)
   return `${fmtBaht(it.base_price)} บาท${extras.length > 0 ? ` · ${extras.join(' · ')}` : ''}`
+}
+
+// ---- menu item images (M1-5b) ----
+
+function fmtMB(bytes: number): string {
+  const mb = bytes / (1024 * 1024)
+  return Number.isInteger(mb) ? String(mb) : mb.toFixed(1)
+}
+
+/** Thai message for image upload failures (client resize + server quota). */
+function imageErrorText(e: unknown): string {
+  const code = errorCode(e)
+  if (code === 'media_quota') return 'เกินโควต้ารูปภาพของเดือนนี้'
+  if (code === 'image_too_large') return 'รูปใหญ่เกินไป'
+  if (e instanceof Error && e.message === 'รูปใหญ่เกินไป') return e.message
+  return friendlyError(e)
 }
 
 // ---- form drafts (string inputs, converted on submit) ----
@@ -191,6 +208,7 @@ export default function MenuPanel() {
     null,
   )
   const [markupForm, setMarkupForm] = useState<MarkupFormState>(() => markupFormFrom(null))
+  const [usage, setUsage] = useState<MediaUsage | null>(null)
 
   useEffect(() => {
     let on = true
@@ -229,6 +247,19 @@ export default function MenuPanel() {
   useEffect(() => {
     void load()
   }, [load])
+
+  // media usage footer line (informational only — failures are ignored)
+  const loadUsage = useCallback(async () => {
+    try {
+      setUsage(await getMediaUsage())
+    } catch {
+      // the quota line is not worth an error message
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadUsage()
+  }, [loadUsage])
 
   // switching shops invalidates any open form / expansion
   useEffect(() => {
@@ -275,6 +306,12 @@ export default function MenuPanel() {
       else n.add(id)
       return n
     })
+  }
+
+  /** Swap one item in local state after an image upload/delete (no full reload). */
+  function itemImageChanged(updated: MenuItem) {
+    setData((prev) => (prev ? { ...prev, items: prev.items.map((i) => (i.id === updated.id ? updated : i)) } : prev))
+    void loadUsage()
   }
 
   function itemPutBody(it: MenuItem, over: Record<string, unknown>): Record<string, unknown> {
@@ -565,6 +602,14 @@ export default function MenuPanel() {
         </select>
       </label>
 
+      {usage ? (
+        <p className="muted small">
+          พื้นที่รูป: {fmtMB(usage.stored_bytes)} / {fmtMB(usage.limits.max_total_bytes)} MB · อัปโหลดเดือนนี้{' '}
+          {usage.class_a.toLocaleString()} / {usage.limits.max_class_a_per_month.toLocaleString()} · เปิดดูรูป{' '}
+          {usage.class_b.toLocaleString()} / {usage.limits.max_class_b_per_month.toLocaleString()}
+        </p>
+      ) : null}
+
       <div className="row">
         <h2 className="grow">เมนู ({items.length})</h2>
         <button className="btn ghost" disabled={busy} onClick={() => void load()}>
@@ -580,10 +625,12 @@ export default function MenuPanel() {
           key={editItemId ?? 'new'}
           title={editItemId !== null ? `แก้ไขเมนู: ${editingItem?.name ?? ''}` : 'เพิ่มเมนู'}
           initial={itemDraft(editingItem)}
+          item={editingItem}
           categories={categories}
           busy={busy}
           onSave={saveItem}
           onCancel={() => setItemForm(null)}
+          onImageChanged={itemImageChanged}
         />
       ) : null}
 
@@ -597,6 +644,19 @@ export default function MenuPanel() {
               .map((it) => (
                 <div className={`item ${it.status === 'active' ? 'ok-item' : ''}`} key={it.id}>
                   <div className="row">
+                    {it.image_key ? (
+                      <img
+                        src={mediaUrl(it.image_key)}
+                        alt=""
+                        width={40}
+                        height={40}
+                        loading="lazy"
+                        style={{ objectFit: 'cover', borderRadius: 6, flex: 'none' }}
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none'
+                        }}
+                      />
+                    ) : null}
                     <strong className="grow">{it.name}</strong>
                     <span className="badge">{typeLabel(it.menu_type)}</span>
                     {it.sold_out ? <span className="badge pending">ของหมด</span> : null}
@@ -708,20 +768,56 @@ export default function MenuPanel() {
 function ItemForm({
   title,
   initial,
+  item,
   categories,
   busy,
   onSave,
   onCancel,
+  onImageChanged,
 }: {
   title: string
   initial: ItemDraft
+  /** Only for an item that already exists — images need a saved id. */
+  item: MenuItem | undefined
   categories: string[]
   busy: boolean
   onSave: (v: ItemValues) => Promise<void>
   onCancel: () => void
+  onImageChanged: (updated: MenuItem) => void
 }) {
   const [d, setD] = useState<ItemDraft>(initial)
   const [err, setErr] = useState('')
+  const [imgBusy, setImgBusy] = useState(false)
+  const [imgErr, setImgErr] = useState('')
+
+  async function pickImage(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow picking the same file again
+    if (!file || !item) return
+    setImgBusy(true)
+    setImgErr('')
+    try {
+      const blob = await prepareMenuImage(file)
+      onImageChanged(await uploadMenuImage(item.id, blob))
+    } catch (ex) {
+      setImgErr(imageErrorText(ex))
+    } finally {
+      setImgBusy(false)
+    }
+  }
+
+  async function removeImage() {
+    if (!item) return
+    setImgBusy(true)
+    setImgErr('')
+    try {
+      onImageChanged(await deleteMenuImage(item.id))
+    } catch (ex) {
+      setImgErr(imageErrorText(ex))
+    } finally {
+      setImgBusy(false)
+    }
+  }
 
   function set<K extends keyof ItemDraft>(k: K, v: ItemDraft[K]) {
     setD((prev) => ({ ...prev, [k]: v }))
@@ -891,6 +987,37 @@ function ItemForm({
           placeholder="เช่น 0"
         />
       </label>
+      {item ? (
+        <>
+          <div className="row">
+            {item.image_key ? (
+              <img
+                src={mediaUrl(item.image_key)}
+                alt={`รูป ${item.name}`}
+                width={64}
+                height={64}
+                style={{ objectFit: 'cover', borderRadius: 8, flex: 'none' }}
+              />
+            ) : (
+              <div
+                aria-hidden="true"
+                style={{ width: 64, height: 64, borderRadius: 8, background: '#e5e5e5', flex: 'none' }}
+              />
+            )}
+            <label className="grow">
+              รูปเมนู (ถ้ามี)
+              <input type="file" accept="image/*" disabled={busy || imgBusy} onChange={pickImage} />
+            </label>
+            {imgBusy ? <span className="muted small">กำลังอัปโหลด…</span> : null}
+            {item.image_key ? (
+              <button className="btn danger" type="button" disabled={busy || imgBusy} onClick={() => void removeImage()}>
+                ลบรูป
+              </button>
+            ) : null}
+          </div>
+          {imgErr ? <p className="error small">{imgErr}</p> : null}
+        </>
+      ) : null}
       <div className="row">
         <button className="btn primary" type="submit" disabled={busy}>
           บันทึก

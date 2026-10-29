@@ -71,6 +71,65 @@ export async function api<T = unknown>(
   return data as T
 }
 
+/**
+ * api() always JSON-stringifies its body, so the raw-bytes image upload goes
+ * through this variant (same error parsing, explicit Content-Type).
+ */
+async function apiBinary<T>(method: string, path: string, blob: Blob, contentType: string): Promise<T> {
+  let res: Response
+  try {
+    res = await fetch(path, {
+      method,
+      headers: { 'Content-Type': contentType },
+      credentials: 'same-origin',
+      body: blob,
+    })
+  } catch {
+    throw new ApiError(0, 'network', 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้')
+  }
+  const text = await res.text()
+  let data: unknown
+  if (text) {
+    try {
+      data = JSON.parse(text)
+    } catch {
+      data = undefined
+    }
+  }
+  if (!res.ok) {
+    const obj = (data !== null && typeof data === 'object' ? data : {}) as Record<string, unknown>
+    const code = typeof obj['error'] === 'string' ? obj['error'] : `http_${res.status}`
+    const message = typeof obj['message'] === 'string' ? obj['message'] : `HTTP ${res.status}`
+    throw new ApiError(res.status, code, message, obj)
+  }
+  return data as T
+}
+
+/** Public, forever-cached URL of a stored image (MenuItem.image_key). */
+export function mediaUrl(key: string): string {
+  return `/api/media/${key}` // server-made key: menu/{uuid}/{uuid}.{ext}, URL-safe
+}
+
+/** PUT /api/owner/menu-items/{id}/image — body is the raw WebP/JPEG bytes. */
+export function uploadMenuImage(itemId: string, blob: Blob): Promise<MenuItem> {
+  return apiBinary<MenuItem>(
+    'PUT',
+    `/api/owner/menu-items/${encodeURIComponent(itemId)}/image`,
+    blob,
+    blob.type === 'image/webp' || blob.type === 'image/jpeg' ? blob.type : 'image/jpeg',
+  )
+}
+
+/** DELETE /api/owner/menu-items/{id}/image — returns the item with image_key null. */
+export function deleteMenuImage(itemId: string): Promise<MenuItem> {
+  return api<MenuItem>('DELETE', `/api/owner/menu-items/${encodeURIComponent(itemId)}/image`)
+}
+
+/** GET /api/owner/media-usage */
+export function getMediaUsage(): Promise<MediaUsage> {
+  return api<MediaUsage>('GET', '/api/owner/media-usage')
+}
+
 /** Transient problems (network / upstream) are always just "retry" — never "logged out". */
 export function friendlyError(e: unknown): string {
   if (!(e instanceof ApiError)) return 'ลองใหม่อีกครั้ง'
@@ -293,6 +352,20 @@ export interface ChannelMarkup {
   grab?: Markup
   lineman?: Markup
   foodpanda?: Markup
+}
+
+/** GET /api/owner/media-usage — this month's upload counters + storage. */
+export interface MediaUsage {
+  month: string
+  class_a: number
+  class_b: number
+  stored_bytes: number
+  limits: {
+    max_image_bytes: number
+    max_total_bytes: number
+    max_class_a_per_month: number
+    max_class_b_per_month: number
+  }
 }
 
 /** GET /api/owner/shops/{shop_id}/menu */

@@ -5,6 +5,7 @@
 //! - [`routes`] — HTTP handlers, grouped per resource
 //! - [`db`]     — helpers around D1/R2 bindings
 //! - [`error`]  — the JSON error type used by every handler
+//! - [`media`]  — R2 menu images + app-enforced free-tier quotas
 //! - [`pricing`] — the pure order-line pricing engine (no D1, no worker types)
 
 use axum::{
@@ -18,6 +19,7 @@ mod auth;
 mod db;
 mod error;
 mod extract;
+mod media;
 mod pricing;
 mod routes;
 mod util;
@@ -64,7 +66,13 @@ pub fn router(env: Env) -> Router {
         .route("/orders/{id}/serve", post(routes::orders::serve))
         .route("/orders/{id}/cancel", post(routes::orders::cancel))
         .route("/orders/{id}/pay", post(routes::orders::pay))
+        .route("/media/{*key}", get(routes::media::get_media))
         .route("/owner/me", get(routes::owner::me))
+        .route(
+            "/owner/menu-items/{id}/image",
+            put(routes::owner::media::put_image).delete(routes::owner::media::delete_image),
+        )
+        .route("/owner/media-usage", get(routes::owner::media::usage))
         // Owner order view, discounts, cancel, refunds (M1-4a).
         .route(
             "/owner/shops/{shop_id}/orders",

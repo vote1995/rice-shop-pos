@@ -25,10 +25,10 @@ database_id = "eb902c69-455f-4c6d-bfdf-3eb8ef48618d"
 migrations_dir = "migrations"
 
 # R2 — menu images (WebP) now; daily backups/archives later (M5)
-# Enable R2 in the dashboard first (M1 needs it for menu images), then uncomment.
-# [[r2_buckets]]
-# binding = "MEDIA"
-# bucket_name = "rice-pos-media"
+# App-enforced free-tier quotas: see api/src/media.rs (R2 has no spending cap).
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "rice-pos-media"
 
 # Cloudflare Access (owner auth) — filled in a later ticket (M0).
 # ACCESS_TEAM_DOMAIN: Zero Trust team domain (JWKS + iss), e.g. "<team>.cloudflareaccess.com"

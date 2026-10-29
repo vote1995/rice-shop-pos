@@ -17,6 +17,7 @@
 //! needing them too.
 
 pub mod devices;
+pub mod media;
 pub mod menu;
 pub mod orders;
 pub mod shops;

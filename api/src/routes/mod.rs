@@ -3,6 +3,7 @@
 
 pub mod device;
 pub mod health;
+pub mod media;
 pub mod menu;
 pub mod orders;
 pub mod owner;

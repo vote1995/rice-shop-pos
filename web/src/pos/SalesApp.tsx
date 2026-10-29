@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ApiError, api, errorCode, friendlyError } from '../api'
+import { ApiError, api, errorCode, friendlyError, mediaUrl } from '../api'
 import type { MenuData, MenuItem, MenuOption } from '../api'
 import {
   applicableGroups,
@@ -1166,6 +1166,18 @@ function ItemTile({
           onTap()
         }}
       >
+        {item.image_key ? (
+          <img
+            src={mediaUrl(item.image_key)}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            style={{ width: '100%', aspectRatio: '4 / 3', objectFit: 'cover', borderRadius: 8 }}
+            onError={(e) => {
+              e.currentTarget.style.display = 'none'
+            }}
+          />
+        ) : null}
         <span className="tile-name">{item.name}</span>
         <span className="tile-price">{fmtBaht(price)} บาท</span>
         {item.sold_out ? <span className="badge pending">ของหมด</span> : null}
