@@ -6,8 +6,8 @@ POS สำหรับร้านข้าว (multi-shop PWA) — self-host �
 ## โครงสร้าง
 
 ```
-api/   Rust Worker (workers-rs + axum) — API + D1 + R2   ← ตัวเดียวที่มีตอนนี้ (M0-1)
-web/   Vite + React + TS PWA (พนักงาน/เจ้าของ)           ← มาทีหลัง (ticket ถัดไป)
+api/   Rust Worker (workers-rs + axum) — API + D1 + R2   ← M0-1
+web/   Vite + React + TS PWA (พนักงาน/เจ้าของ)           ← M0-3 (React PWA shell, Thai UI)
 ```
 
 - **DB:** Cloudflare D1 (`api/migrations/`) — schema v1: shops, users, devices, menu_items,
@@ -77,3 +77,38 @@ npx wrangler dev & curl http://localhost:8787/health
   ```
 
 - Secrets: `PIN_PEPPER` (HMAC key for staff PINs) — `.dev.vars` locally, `wrangler secret put PIN_PEPPER` in production.
+
+## web/ — React PWA (POS หน้าร้าน + แดชบอร์ดเจ้าของ)
+
+Vite + React + TypeScript, ภาษาไทยทั้งหมด — ไม่ใช้ UI library และ router library
+(bundle เล็กเพื่อ Android ราคาถูก, FEATURES 3.52) ติดตั้งเป็น PWA ได้
+(service worker แคชเฉพาะ app shell — `/api` อยู่ใน denylist และไม่มี runtime caching สำหรับ API เด็ดขาด)
+
+### Dev (รัน 2 terminal)
+
+```bash
+# 1) API — terminal แรก
+cd api
+npx wrangler dev                     # http://127.0.0.1:8787
+
+# 2) Web — terminal ที่สอง
+cd web
+npm install
+npm run dev                          # http://localhost:5173 (proxy /api → 127.0.0.1:8787)
+```
+
+- POS (เครื่องหน้าร้าน): <http://localhost:5173/>
+- แอปเจ้าของร้าน: <http://localhost:5173/owner>
+  (production ใช้ subdomain `owner.<domain>` หลัง Cloudflare Access —
+  `web/src/main.tsx` เลือก app จาก hostname / pathname, ไม่มี router)
+
+### Build
+
+```bash
+cd web
+npm run build    # tsc -b + vite build → web/dist ซึ่ง Worker ใน api/ เป็นตัว serve
+```
+
+พฤติกรรมหลักฝั่ง POS: ลงทะเบียนเครื่อง → รอเจ้าของอนุมัติ (poll `/api/device/status`
+ทุก 5 วินาที) → เลือกพนักงาน → PIN → หน้าหลัก (session token เก็บใน sessionStorage เท่านั้น,
+auto-lock เมื่อไม่มีการใช้งาน 5 นาที, เครื่องถูกเพิกถอน = ลบข้อมูลในเครื่องทั้งหมดทันที)

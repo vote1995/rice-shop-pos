@@ -121,11 +121,16 @@ pub async fn pin(
             return Ok(locked_response(locked_until, now));
         }
         let attempts_left = MAX_PIN_ATTEMPTS - attempt.failed_pin_attempts;
-        return Err(ApiError::coded(
+        // Standard error shape + `attempts_left` so the client can localize.
+        return Ok((
             StatusCode::UNAUTHORIZED,
-            "invalid_pin",
-            format!("wrong pin, {attempts_left} attempts left"),
-        ));
+            Json(json!({
+                "error": "invalid_pin",
+                "message": format!("wrong pin, {attempts_left} attempts left"),
+                "attempts_left": attempts_left,
+            })),
+        )
+            .into_response());
     }
 
     // Correct: clear the lockout and open the session in ONE batch, so a
