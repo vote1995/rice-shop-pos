@@ -1,0 +1,30 @@
+name = "rice-pos-api"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-10-01"
+
+[build]
+command = "worker-build --release"
+
+# ---------------------------------------------------------------------------
+# D1 — all POS data (schema v1, see migrations/)
+# database_id is a PLACEHOLDER for local dev only; replace with the real id
+# from `wrangler d1 create rice-pos` when we first deploy (later ticket).
+# Do NOT run anything remote with the placeholder id.
+# ---------------------------------------------------------------------------
+[[d1_databases]]
+binding = "DB"
+database_name = "rice-pos"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# R2 — menu images (WebP) now; daily backups/archives later (M5)
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "rice-pos-media"
+
+# Cloudflare Access (owner auth) — filled in a later ticket (M0).
+# ACCESS_TEAM_DOMAIN: e.g. "owner.example.com" team domain used to validate the JWT
+# ACCESS_AUD:         Access application AUD claim
+[vars]
+ACCESS_TEAM_DOMAIN = ""
+ACCESS_AUD = ""

@@ -1,0 +1,37 @@
+[package]
+name = "rice-pos-api"
+version = "0.1.0"
+edition = "2021"
+description = "Rice-shop POS API — Rust on Cloudflare Workers (axum + D1 + R2)"
+publish = false
+
+# Cloudflare Worker: compiled to wasm and loaded by worker-build's JS shim.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# workers-rs (latest) — `http` feature gives HttpRequest/HttpResponse types for
+# `#[event(fetch)]`, `d1` gives the D1 binding, `axum` re-exports a matching axum
+# Body type so the router output can be returned straight from the fetch handler.
+worker = { version = "0.8", features = ["http", "d1", "axum"] }
+# axum with default-features off (recommended for workers-rs); `json` is all we
+# need for JSON handlers.
+axum = { version = "0.8", default-features = false, features = ["json"] }
+tower-service = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Owner auth: verify Cloudflare Access RS256 JWTs (pure-Rust crypto, builds for wasm).
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+# Randomness for salts/tokens. Backend selected in .cargo/config.toml for wasm.
+getrandom = { version = "0.3", features = ["wasm_js"] }
+# Not used directly: rsa (via jsonwebtoken) pulls getrandom 0.2, which needs `js` on wasm.
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+hex = "0.4"
+
+# Small wasm binary matters on Workers.
+[profile.release]
+opt-level = "s"
+lto = true

@@ -1,0 +1,19 @@
+# Rust
+target/
+
+# Node
+node_modules/
+
+# Build outputs (worker-build, bundlers, ...)
+build/
+dist/
+
+# Wrangler local state & secrets
+.wrangler/
+.dev.vars
+
+# Local-only files
+*.local
+
+# Scratch
+.tmp/
