@@ -31,11 +31,11 @@ migrations_dir = "migrations"
 # bucket_name = "rice-pos-media"
 
 # Cloudflare Access (owner auth) — filled in a later ticket (M0).
-# ACCESS_TEAM_DOMAIN: e.g. "owner.example.com" team domain used to validate the JWT
+# ACCESS_TEAM_DOMAIN: Zero Trust team domain (JWKS + iss), e.g. "<team>.cloudflareaccess.com"
 # ACCESS_AUD:         Access application AUD claim
 [vars]
-ACCESS_TEAM_DOMAIN = ""
-ACCESS_AUD = ""
+ACCESS_TEAM_DOMAIN = "vbo.cloudflareaccess.com"
+ACCESS_AUD = "85f5affb5b3c7bb44173c89f678199e7f5c24b935a34fd91b18d085172b69932"
 
 # SPA (web/dist) + API in one Worker. Only /api/* runs the Worker first; every
 # other path is a static asset, unknown paths fall back to index.html.
