@@ -302,3 +302,88 @@ export interface MenuData {
   options: MenuOption[]
   channel_markup: ChannelMarkup
 }
+
+// ---- owner day view: bills + payments (money = INTEGER satang; times = unix ms) ----
+
+export type OrderType = 'dine_in' | 'take_away' | 'delivery'
+
+/** The four sales channels (orders.channel, schema 0001). */
+export type OrderChannel = 'counter' | 'grab' | 'lineman' | 'foodpanda'
+
+export type OrderStatus = 'preparing' | 'served' | 'paid' | 'cancelled'
+
+export type PaymentMethod = 'cash' | 'delivery_app' | 'promptpay'
+
+/** payments.status: a Beam PromptPay charge is 'pending' before it lands. */
+export type PaymentStatus = 'succeeded' | 'refunded' | 'pending' | 'expired'
+
+/** The frozen option snapshot of one bill line (order_items.options_json). */
+export interface OrderOptionSnapshot {
+  id: string
+  name: string
+  price_add: number
+}
+
+/** One bill line exactly as the order JSON reports it. */
+export interface OrderItem {
+  id: string
+  item_name: string
+  options: OrderOptionSnapshot[]
+  quantity: number
+  note: string | null
+  unit_price: number
+  discount_amount: number
+  line_total: number
+}
+
+export interface Order {
+  id: string
+  queue_number: number
+  order_type: OrderType
+  channel: OrderChannel
+  table_no: string | null
+  note: string | null
+  status: OrderStatus
+  total_amount: number
+  discount_amount: number
+  created_by: string
+  created_at: number
+  paid_at: number | null
+  cancelled_at: number | null
+  cancel_reason: string | null
+  items: OrderItem[]
+}
+
+/** One payments row as the owner API reports it (with the refund fields). */
+export interface Payment {
+  id: string
+  method: PaymentMethod
+  amount: number
+  cash_received: number | null
+  cash_change: number | null
+  status: PaymentStatus
+  refund_amount: number | null
+  refund_reason: string | null
+  refunded_at: number | null
+  created_at: number
+}
+
+/** GET /api/owner/shops/{shop_id}/orders?day=YYYY-MM-DD: one bill + its payments. */
+export interface OwnerDayOrder extends Order {
+  payments: Payment[]
+}
+
+export interface OwnerDayOrdersData {
+  orders: OwnerDayOrder[]
+}
+
+/** POST /api/owner/orders/{id}/discount body: the FULL new discount state. */
+export interface BillDiscount {
+  kind: 'baht' | 'percent'
+  value: number
+}
+
+export interface DiscountBody {
+  bill: BillDiscount | null
+  lines: Array<{ item_id: string; amount: number }>
+}

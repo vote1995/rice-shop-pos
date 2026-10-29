@@ -3,10 +3,12 @@ import type { FormEvent } from 'react'
 import { ApiError, api, friendlyError } from '../api'
 import type { OwnerDevice, OwnerMe, OwnerStaff, Shop } from '../api'
 import MenuPanel from './MenuPanel'
+import { OrdersPanel } from './OrdersPanel'
 
-type Tab = 'devices' | 'shops' | 'staff' | 'menu'
+type Tab = 'orders' | 'devices' | 'shops' | 'staff' | 'menu'
 
 const TABS: Array<{ id: Tab; label: string }> = [
+  { id: 'orders', label: 'ออเดอร์' },
   { id: 'devices', label: 'เครื่อง' },
   { id: 'shops', label: 'ร้าน' },
   { id: 'staff', label: 'พนักงาน' },
@@ -80,6 +82,7 @@ export default function OwnerApp() {
             {msg}
           </p>
         ) : null}
+        {tab === 'orders' ? <OrdersPanel /> : null}
         {tab === 'devices' ? <DevicesPanel /> : null}
         {tab === 'shops' ? <ShopsPanel /> : null}
         {tab === 'staff' ? <StaffPanel /> : null}

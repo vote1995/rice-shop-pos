@@ -235,3 +235,24 @@ button:disabled { opacity: 0.45; cursor: default; }
   .owner-main, .tabs { padding-left: 24px; padding-right: 24px; }
   .item-grid { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* ---- owner orders day view (M1-4b, FEATURES 3.47/3.60) ---- */
+.sum-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.sum-box {
+  border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 2px; background: #fbfdfb;
+}
+.sum-val { font-size: 1.1rem; font-weight: 800; }
+.order-lines { display: flex; flex-direction: column; gap: 6px; }
+.order-line {
+  display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
+  border-bottom: 1px dashed var(--border); padding-bottom: 6px;
+}
+.order-line:last-child { border-bottom: none; padding-bottom: 0; }
+.line-amt { font-weight: 700; white-space: nowrap; }
+.disc-line { display: flex; justify-content: space-between; gap: 10px; }
+.pay-line {
+  border: 1px solid var(--border); border-radius: 12px; padding: 10px;
+  display: flex; flex-direction: column; gap: 6px; background: #fbfdfb;
+}
+
