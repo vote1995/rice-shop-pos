@@ -236,3 +236,69 @@ export interface OwnerStaff {
   status: string
   locked_until: number | string | null
 }
+
+// ---- owner menu (money = INTEGER satang; UI shows/enters baht) ----
+
+export type MenuType = 'rice_curry' | 'made_to_order'
+
+export interface MenuItem {
+  id: string
+  shop_id: string
+  name: string
+  category: string
+  menu_type: MenuType
+  base_price: number
+  price_2: number | null
+  price_3: number | null
+  grab_price: number | null
+  lineman_price: number | null
+  foodpanda_price: number | null
+  cost: number | null
+  image_key: string | null
+  sold_out: boolean
+  status: 'active' | 'inactive'
+  sort_order: number
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface OptionGroup {
+  id: string
+  shop_id: string
+  menu_item_id: string | null
+  name: string
+  required: boolean
+  max_select: number | null
+  tier_pricing: boolean
+  sort_order: number
+}
+
+export interface MenuOption {
+  id: string
+  shop_id: string
+  option_group_id: string
+  name: string
+  price_add: number
+  sold_out: boolean
+  sort_order: number
+}
+
+/** kind 'baht' -> value is satang per plate; kind 'percent' -> value 0..300. */
+export interface Markup {
+  kind: 'percent' | 'baht'
+  value: number
+}
+
+export interface ChannelMarkup {
+  grab?: Markup
+  lineman?: Markup
+  foodpanda?: Markup
+}
+
+/** GET /api/owner/shops/{shop_id}/menu */
+export interface MenuData {
+  items: MenuItem[]
+  option_groups: OptionGroup[]
+  options: MenuOption[]
+  channel_markup: ChannelMarkup
+}

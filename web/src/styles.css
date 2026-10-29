@@ -130,6 +130,20 @@ button:disabled { opacity: 0.45; cursor: default; }
 .badge.approved { background: #e0f0e1; color: var(--green-dark); }
 .badge.revoked { background: #fdecea; color: var(--danger); }
 
+/* owner menu panel */
+.check { flex-direction: row; align-items: center; gap: 8px; font-weight: 600; }
+.check input { width: auto; min-height: 22px; accent-color: var(--green); }
+.menu-cat { margin: 10px 0 -2px; font-size: 1.05rem; font-weight: 800; color: var(--green-dark); }
+.subblock { border-top: 1px dashed var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+.group-block {
+  border: 1px solid var(--border); border-radius: 12px; padding: 10px;
+  display: flex; flex-direction: column; gap: 8px; background: #fbfdfb;
+}
+.group-block .list { grid-template-columns: 1fr; gap: 6px; }
+.opt-line { align-items: center; }
+.markup-row select { flex: 0 0 150px; }
+.markup-row input { flex: 1 1 110px; min-width: 90px; }
+
 @media (min-width: 720px) {
   .list { grid-template-columns: 1fr 1fr; }
   .owner-main, .tabs { padding-left: 24px; padding-right: 24px; }
