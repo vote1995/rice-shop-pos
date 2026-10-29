@@ -18,6 +18,7 @@
 
 pub mod devices;
 pub mod menu;
+pub mod orders;
 pub mod shops;
 pub mod staff;
 

@@ -303,8 +303,9 @@ fn validate_order_type_channel(order_type: &str, channel: &str) -> Result<(), Ap
 /// Start of the Bangkok (UTC+7) calendar day that `now_ms` falls in, in unix
 /// ms. Queue numbers run per shop per day (3.11) and the shop clock is
 /// Bangkok time, so the day boundary is 17:00 UTC. Floor division keeps the
-/// math right for instants before 1970 as well.
-fn bangkok_day_start_ms(now_ms: i64) -> i64 {
+/// math right for instants before 1970 as well. The owner day view (M1-4a)
+/// resolves its `?day=` parameter with the same math.
+pub(crate) fn bangkok_day_start_ms(now_ms: i64) -> i64 {
     (now_ms + BANGKOK_OFFSET_MS).div_euclid(DAY_MS) * DAY_MS - BANGKOK_OFFSET_MS
 }
 
@@ -536,8 +537,13 @@ async fn existing_line_id(env: &Env, ids: &[String]) -> Result<Option<String>, A
 }
 
 /// One order of this shop with its lines, or None if it does not exist / belongs
-/// to another shop. Two queries: the bill and its lines.
-async fn load_order(env: &Env, shop_id: &str, id: &str) -> Result<Option<OrderJson>, ApiError> {
+/// to another shop. Two queries: the bill and its lines. Shared with the owner
+/// order routes (M1-4a), so an owner reads exactly the bill the POS wrote.
+pub(crate) async fn load_order(
+    env: &Env,
+    shop_id: &str,
+    id: &str,
+) -> Result<Option<OrderJson>, ApiError> {
     let Some(order) = db::db(env)?
         .prepare(format!(
             "SELECT {ORDER_COLUMNS} FROM orders WHERE id = ?1 AND shop_id = ?2"
@@ -717,14 +723,16 @@ fn line_insert(
         ])?)
 }
 
-/// Rows changed by one statement (0 when D1 reports no meta).
-fn changes(result: &D1Result) -> Result<usize, ApiError> {
+/// Rows changed by one statement (0 when D1 reports no meta). Also used by the
+/// owner order routes (M1-4a).
+pub(crate) fn changes(result: &D1Result) -> Result<usize, ApiError> {
     Ok(result.meta()?.and_then(|m| m.changes).unwrap_or(0))
 }
 
 /// Why a conditional transition matched no row: the bill is not in this shop
 /// (404) or is already in another status (409 naming it, so the POS reloads).
-async fn transition_refused(env: &Env, shop_id: &str, id: &str) -> ApiError {
+/// Shared with the owner order routes (M1-4a).
+pub(crate) async fn transition_refused(env: &Env, shop_id: &str, id: &str) -> ApiError {
     match load_order(env, shop_id, id).await {
         Ok(Some(order)) => ApiError::Conflict(format!("order is {}", order.status)),
         Ok(None) => ApiError::NotFound,
@@ -732,8 +740,10 @@ async fn transition_refused(env: &Env, shop_id: &str, id: &str) -> ApiError {
     }
 }
 
-/// Cancel reason (3.15): mandatory, trimmed, 1..=200 characters.
-fn clean_cancel_reason(raw: &str) -> Result<String, ApiError> {
+/// Cancel reason (3.15): mandatory, trimmed, 1..=200 characters. The owner
+/// refund reason (3.28, M1-4a) carries the same bound, so it is cleaned here
+/// too.
+pub(crate) fn clean_cancel_reason(raw: &str) -> Result<String, ApiError> {
     let reason = raw.trim();
     if reason.is_empty() || reason.chars().count() > MAX_CANCEL_REASON_CHARS {
         return Err(ApiError::BadRequest(format!(

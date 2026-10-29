@@ -65,6 +65,14 @@ pub fn router(env: Env) -> Router {
         .route("/orders/{id}/cancel", post(routes::orders::cancel))
         .route("/orders/{id}/pay", post(routes::orders::pay))
         .route("/owner/me", get(routes::owner::me))
+        // Owner order view, discounts, cancel, refunds (M1-4a).
+        .route(
+            "/owner/shops/{shop_id}/orders",
+            get(routes::owner::orders::day_list),
+        )
+        .route("/owner/orders/{id}/discount", post(routes::owner::orders::discount))
+        .route("/owner/orders/{id}/cancel", post(routes::owner::orders::cancel))
+        .route("/owner/payments/{id}/refund", post(routes::owner::orders::refund))
         .route(
             "/owner/shops",
             get(routes::owner::shops::list).post(routes::owner::shops::create),
