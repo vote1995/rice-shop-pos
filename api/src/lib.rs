@@ -30,7 +30,7 @@ pub struct AppState {
 pub fn router(env: Env) -> Router {
     let state = AppState { env };
 
-    Router::new()
+    let api = Router::new()
         .route("/health", get(routes::health::health))
         // Device lifecycle + staff PIN login: public in the sense that they
         // authenticate with the device token / session token, not owner auth.
@@ -60,6 +60,13 @@ pub fn router(env: Env) -> Router {
             "/owner/devices/{id}/revoke",
             post(routes::owner::devices::revoke),
         )
+        .fallback(routes::not_found);
+
+    // Same Worker serves the SPA (static assets) and the API; only /api/* reaches
+    // this router (wrangler.toml run_worker_first), so owner.<domain> and
+    // pos.<domain> call the API same-origin and Access covers owner calls.
+    Router::new()
+        .nest("/api", api)
         .fallback(routes::not_found)
         .with_state(state)
 }
