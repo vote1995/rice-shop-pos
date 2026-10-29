@@ -19,6 +19,11 @@ pub enum ApiError {
     Forbidden,
     /// Duplicate id with different data, invalid state transition, ...
     Conflict(String),
+    /// Fully specified error: explicit status + machine-readable code (e.g.
+    /// 403 `device_pending`, 401 `invalid_pin`) with a message that is shown
+    /// to the client as-is. Used where the generic variants above do not
+    /// carry a precise enough code for the PWA to branch on.
+    Coded(StatusCode, &'static str, String),
     /// An upstream we depend on (e.g. Access JWKS) failed: the outcome is
     /// undecidable, so this must never be reported as 401/403.
     Unavailable(String),
@@ -28,6 +33,15 @@ pub enum ApiError {
 }
 
 impl ApiError {
+    /// Constructor for [`ApiError::Coded`].
+    pub(crate) fn coded(
+        status: StatusCode,
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
+        ApiError::Coded(status, code, message.into())
+    }
+
     fn status_and_code(&self) -> (StatusCode, &'static str) {
         match self {
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not_found"),
@@ -35,6 +49,7 @@ impl ApiError {
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
+            ApiError::Coded(status, code, _) => (*status, code),
             ApiError::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "upstream_unavailable"),
             ApiError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
         }
@@ -46,6 +61,7 @@ impl IntoResponse for ApiError {
         let (status, code) = self.status_and_code();
         let message = match self {
             ApiError::BadRequest(msg) | ApiError::Conflict(msg) => msg,
+            ApiError::Coded(_, _, msg) => msg,
             ApiError::Unavailable(detail) => {
                 worker::console_warn!("upstream_unavailable: {detail}");
                 "upstream service unavailable, try again".to_string()

@@ -3,7 +3,9 @@
 //! different mechanisms and must be able to evolve independently.
 
 pub mod crypto;
+pub mod device;
 pub mod owner;
+pub mod staff;
 
 use worker::Env;
 

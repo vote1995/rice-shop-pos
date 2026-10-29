@@ -18,6 +18,7 @@ mod db;
 mod error;
 mod extract;
 mod routes;
+mod util;
 
 /// Shared handler state. `Env` is cheap to clone (a handle to the Workers
 /// runtime bindings); later tickets will hang D1-backed services on here.
@@ -31,6 +32,14 @@ pub fn router(env: Env) -> Router {
 
     Router::new()
         .route("/health", get(routes::health::health))
+        // Device lifecycle + staff PIN login: public in the sense that they
+        // authenticate with the device token / session token, not owner auth.
+        .route("/device/register", post(routes::device::register))
+        .route("/device/status", get(routes::device::status))
+        .route("/device/staff", get(routes::device::staff))
+        .route("/auth/pin", post(routes::staff_auth::pin))
+        .route("/auth/logout", post(routes::staff_auth::logout))
+        .route("/staff/me", get(routes::staff_auth::me))
         .route("/owner/me", get(routes::owner::me))
         .route(
             "/owner/shops",
