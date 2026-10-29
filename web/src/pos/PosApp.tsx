@@ -14,6 +14,7 @@ import {
   wipeAllStorage,
 } from '../api'
 import type { DeviceCreds, DeviceStatus, PinResponse, RegisterResponse, Staff } from '../api'
+import SalesApp from './SalesApp'
 
 // 3.54: auto-lock after 5 minutes without any pointer/key/touch activity.
 const AUTOLOCK_MS = 5 * 60 * 1000
@@ -430,31 +431,31 @@ export default function PosApp() {
   }
 
   if (screen === 'home' && me) {
+    /** 3.70/M1-3b: a staff API call answered session_invalid -> re-lock to PIN for the same user. */
+    const sessionExpired = () => {
+      void endSession(false)
+    }
     return (
       <div className="screen">
         <header className="bar">
           <span className="brand">POS ร้านข้าว</span>
-          {shopName ? <span className="muted">ร้าน {shopName}</span> : null}
+          {shopName ? <span className="muted">ร้าน {shopName} · {me.name}</span> : <span className="muted">{me.name}</span>}
+          <span className="bar-actions">
+            <button className="bar-btn" onClick={() => void endSession(false)}>
+              ล็อกจอ
+            </button>
+            <button className="bar-btn" onClick={() => void endSession(true)}>
+              ออกจากระบบ
+            </button>
+          </span>
         </header>
         <main className="content">
-          <div className="card center">
-            <h2>สวัสดี {me.name}</h2>
-            {shopName ? <p>ร้าน {shopName}</p> : null}
-            <p className="muted">หน้าขายจะมาใน M1</p>
-            <div className="grid">
-              <button className="btn primary" onClick={() => void endSession(false)}>
-                ล็อกหน้าจอ
-              </button>
-              <button className="btn danger" onClick={() => void endSession(true)}>
-                ออกจากระบบ
-              </button>
-            </div>
-            {msg ? (
-              <p className="error" role="alert">
-                {msg}
-              </p>
-            ) : null}
-          </div>
+          <SalesApp onSessionExpired={sessionExpired} onRevoked={handleRevoked} />
+          {msg ? (
+            <p className="error" role="alert">
+              {msg}
+            </p>
+          ) : null}
         </main>
       </div>
     )
