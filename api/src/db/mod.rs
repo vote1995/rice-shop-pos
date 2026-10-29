@@ -8,6 +8,7 @@ use crate::error::ApiError;
 use worker::{Bucket, D1Database, Env};
 
 pub const DB_BINDING: &str = "DB";
+#[allow(dead_code)] // used by the R2 (media) tickets
 pub const R2_BINDING: &str = "MEDIA";
 
 pub fn db(env: &Env) -> Result<D1Database, ApiError> {
@@ -15,6 +16,7 @@ pub fn db(env: &Env) -> Result<D1Database, ApiError> {
         .map_err(|e| ApiError::Internal(format!("D1 binding '{DB_BINDING}' unavailable: {e}")))
 }
 
+#[allow(dead_code)] // used by the R2 (media) tickets
 pub fn media(env: &Env) -> Result<Bucket, ApiError> {
     env.bucket(R2_BINDING).map_err(|e| {
         ApiError::Internal(format!("R2 binding '{R2_BINDING}' unavailable: {e}"))

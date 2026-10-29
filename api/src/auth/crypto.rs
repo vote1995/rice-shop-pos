@@ -20,12 +20,14 @@ fn random_bytes<const N: usize>() -> [u8; N] {
     buf
 }
 
+#[allow(dead_code)] // used by M0-2b (staff PIN login, device registration)
 pub fn sha256_hex(input: &str) -> String {
     hex::encode(Sha256::digest(input.as_bytes()))
 }
 
 /// A fresh opaque bearer token (32 random bytes, base64url) and the hash we
 /// store for it. Only the hash ever reaches D1.
+#[allow(dead_code)] // used by M0-2b (staff PIN login, device registration)
 pub fn new_token() -> (String, String) {
     let token = URL_SAFE_NO_PAD.encode(random_bytes::<32>());
     let hash = sha256_hex(&token);
@@ -54,6 +56,7 @@ pub fn hash_pin(pepper: &[u8], salt_hex: &str, pin: &str) -> Option<String> {
 }
 
 /// Constant-time comparison against the stored hash.
+#[allow(dead_code)] // used by M0-2b (staff PIN login, device registration)
 pub fn verify_pin(pepper: &[u8], salt_hex: &str, pin: &str, expected_hex: &str) -> bool {
     let (Some(mac), Ok(expected)) = (pin_mac(pepper, salt_hex, pin), hex::decode(expected_hex))
     else {

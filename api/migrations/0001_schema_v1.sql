@@ -85,7 +85,7 @@ CREATE TABLE users (
 -- ===========================================================================
 CREATE TABLE devices (
     id                TEXT PRIMARY KEY,               -- client UUID (สร้างตอนติดตั้ง PWA บนเครื่อง)
-    -- NULL ได้เฉพาะตอน pending — เจ้าของเลือกร้านตอนกดอนุมัติ
+    -- NULL ได้ตอน pending (เจ้าของเลือกร้านตอนกดอนุมัติ) และถ้าถูก revoke ก่อนอนุมัติ
     shop_id           TEXT REFERENCES shops(id),
     name              TEXT NOT NULL,                  -- ชื่อเครื่องที่ตั้ง (เช่น "ร้าน A หน้าครัว")
     model             TEXT,                           -- รุ่น/UA ถ้าได้
@@ -99,7 +99,7 @@ CREATE TABLE devices (
     last_sync_at      INTEGER,                        -- last sync (3.74 / SyncBatch M3)
     created_at        INTEGER NOT NULL,
     updated_at        INTEGER NOT NULL,
-    CHECK (status = 'pending' OR shop_id IS NOT NULL)
+    CHECK (status <> 'approved' OR shop_id IS NOT NULL)
 ) STRICT;
 
 -- ===========================================================================

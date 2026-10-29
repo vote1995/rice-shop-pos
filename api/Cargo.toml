@@ -30,6 +30,12 @@ hmac = "0.12"
 sha2 = "0.10"
 base64 = "0.22"
 hex = "0.4"
+# Parsing (validating) client-generated UUID ids — ids always come from the
+# client, the server never generates them.
+uuid = { version = "1", default-features = false, features = ["std"] }
+# Explicit dep for `JsValue` in D1 bind slices (same crate worker re-exports
+# internally, so this adds no extra copy to the wasm binary).
+wasm-bindgen = "0.2"
 
 # Small wasm binary matters on Workers.
 [profile.release]
