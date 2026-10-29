@@ -54,6 +54,12 @@ pub fn router(env: Env) -> Router {
             "/menu/options/{id}/sold-out",
             post(routes::menu::option_sold_out),
         )
+        // Staff orders (M1-2a): create (server-priced) and the queue list.
+        .route(
+            "/orders",
+            get(routes::orders::list).post(routes::orders::create),
+        )
+        .route("/orders/{id}", get(routes::orders::get_order))
         .route("/owner/me", get(routes::owner::me))
         .route(
             "/owner/shops",

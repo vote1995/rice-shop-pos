@@ -47,7 +47,7 @@ where
     Ok(i64::deserialize(deserializer)? != 0)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MenuItem {
     pub id: String,
     pub shop_id: String,
