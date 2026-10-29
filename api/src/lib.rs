@@ -60,6 +60,10 @@ pub fn router(env: Env) -> Router {
             get(routes::orders::list).post(routes::orders::create),
         )
         .route("/orders/{id}", get(routes::orders::get_order))
+        .route("/orders/{id}/items", post(routes::orders::add_items))
+        .route("/orders/{id}/serve", post(routes::orders::serve))
+        .route("/orders/{id}/cancel", post(routes::orders::cancel))
+        .route("/orders/{id}/pay", post(routes::orders::pay))
         .route("/owner/me", get(routes::owner::me))
         .route(
             "/owner/shops",

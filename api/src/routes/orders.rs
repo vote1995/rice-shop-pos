@@ -3,9 +3,13 @@
 //! Endpoints (staff auth: `shop_id` and `created_by` ALWAYS come from the
 //! session, never from the request body, so one shop's staff can neither write
 //! nor read another shop's bills):
-//! - `POST /orders`       key an order (idempotent by client id, 3.70)
-//! - `GET  /orders`       the queue screen feed (3.19)
-//! - `GET  /orders/{id}`  one order with its lines
+//! - `POST /orders`              key an order (idempotent by client id, 3.70)
+//! - `GET  /orders`              the queue screen feed (3.19)
+//! - `GET  /orders/{id}`         one order with its lines
+//! - `POST /orders/{id}/items`   the customer orders more (3.13)
+//! - `POST /orders/{id}/serve`   plate is up (3.14)
+//! - `POST /orders/{id}/cancel`  void an unpaid bill, with a reason (3.15)
+//! - `POST /orders/{id}/pay`     close the bill: cash / the delivery app (3.23, 4.2)
 //!
 //! The client never sends prices: every line is priced server-side by
 //! [`crate::pricing`] from the menu rows of the session shop at the moment the
@@ -17,6 +21,16 @@
 //! Queue numbers (3.11) run per shop per Bangkok calendar day (UTC+7, no DST)
 //! and are assigned INSIDE the insert, so two concurrent orders can never take
 //! the same number.
+//!
+//! Lifecycle (M1-2b): preparing -> served -> paid | cancelled is driven by one
+//! conditional UPDATE per transition (`WHERE id = ? AND shop_id = ? AND
+//! status IN (...)`) whose change count is then checked, so two concurrent
+//! taps on the same bill (serve + pay, cancel + add lines) can never both win
+//! (the loser reloads and answers 404 (no such bill in this shop) or 409 with
+//! the status the bill is actually in). `pay` writes its append-only `payments`
+//! row (3.73) and closes the bill in ONE batch, and only ever charges the
+//! server-side `orders.total_amount`. Refunding a paid bill is owner-only
+//! (3.28, later ticket), which is why `cancel` refuses a paid bill with a 409.
 
 use std::collections::{HashMap, HashSet};
 
@@ -28,13 +42,13 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use worker::Env;
+use worker::{D1Result, Env};
 
 use crate::auth::staff::StaffAuth;
 use crate::extract::ApiJson;
 use crate::pricing::{line_total, price_line, PricingGroup, PricingItem, PricingOption};
 use crate::routes::owner::menu::{MenuItem, MenuOption, OptionGroup};
-use crate::util::{int, now_ms, opt_txt, parse_uuid, txt};
+use crate::util::{int, now_ms, opt_int, opt_txt, parse_uuid, txt};
 use crate::{db, error::ApiError, AppState};
 
 /// Bangkok is UTC+7 all year (no DST), so the sale day boundary is a fixed
@@ -50,6 +64,12 @@ const MAX_CLOSED: i64 = 100;
 const MAX_TABLE_NO_CHARS: usize = 20;
 /// Bill/line notes are at most 200 characters (3.12).
 const MAX_NOTE_CHARS: usize = 200;
+/// Cancel reasons (3.15) share the note bound: trimmed, 1..=200 characters.
+const MAX_CANCEL_REASON_CHARS: usize = 200;
+/// How far above the total the received cash may sit, in satang
+/// (10_000_000 satang = 100 000.00 THB). A bigger gap is a keyed-in typo, not a
+/// stack of banknotes, so it is refused (3.23).
+const MAX_CASH_OVER: i64 = 10_000_000;
 
 /// Column lists mirror `routes::owner::menu` one-to-one (the shared row
 /// structs deserialize them); local consts keep that module's SQL untouched.
@@ -98,6 +118,35 @@ pub struct CreateOrderItemBody {
     pub note: Option<String>,
 }
 
+/// `POST /orders/{id}/items` body (3.13): the same line shape as
+/// `POST /orders`, minus everything about the bill itself.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AddItemsBody {
+    pub items: Vec<CreateOrderItemBody>,
+}
+
+/// `POST /orders/{id}/cancel` body (3.15): a reason is mandatory.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancelBody {
+    pub reason: String,
+}
+
+/// `POST /orders/{id}/pay` body (3.23, 4.2). `amount` is NOT here: the server
+/// charges `orders.total_amount` and never trusts the client.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PayBody {
+    /// Client UUID (idempotent retries, 3.70).
+    pub payment_id: String,
+    /// "cash" | "delivery_app" - must match the order's channel (see
+    /// [`validate_payment_method`]).
+    pub method: String,
+    /// Satang handed over the counter; cash only, absent otherwise.
+    pub cash_received: Option<i64>,
+}
+
 /// The option snapshot stored in order_items.options_json and echoed back in
 /// every order JSON ([`pricing::SelectedOption`] in storage shape).
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -143,6 +192,25 @@ pub struct OrderJson {
 #[derive(Debug, Serialize)]
 pub struct OrdersJson {
     pub orders: Vec<OrderJson>,
+}
+
+/// One payments row, as the pay endpoint reports it.
+#[derive(Debug, Serialize)]
+pub struct PaymentJson {
+    pub id: String,
+    pub method: String,
+    pub amount: i64,
+    pub cash_received: Option<i64>,
+    pub cash_change: Option<i64>,
+    pub status: String,
+}
+
+/// `POST /orders/{id}/pay` payload: the closed bill plus the payment that
+/// closed it.
+#[derive(Debug, Serialize)]
+pub struct PaidJson {
+    pub order: OrderJson,
+    pub payment: PaymentJson,
 }
 
 /// One orders row as D1 returns it (booleans never appear here; every column
@@ -560,6 +628,167 @@ async fn load_shop_pricing(
     })
 }
 
+/// Prices every request line on `channel` from the loaded shop menu and sums
+/// the bill. Shared by `create` and `add_items`, so a bill and its later
+/// additions are priced by exactly the same rules.
+fn price_lines(
+    menu: &ShopPricing,
+    channel: &str,
+    lines: &[NewLine],
+) -> Result<(Vec<PricedNewLine>, i64), ApiError> {
+    let mut priced: Vec<PricedNewLine> = Vec::with_capacity(lines.len());
+    let mut total_amount = 0_i64;
+    for line in lines {
+        let Some(item) = menu.items.get(&line.menu_item_id) else {
+            return Err(ApiError::BadRequest(format!(
+                "menu item {} is not on this shop's menu",
+                line.menu_item_id
+            )));
+        };
+        let unit = price_line(
+            &pricing_item(item),
+            &menu.groups,
+            channel,
+            &menu.markup,
+            &line.option_ids,
+        )?;
+        let line_amount = line_total(unit.unit_price, line.quantity)?;
+        total_amount = total_amount
+            .checked_add(line_amount)
+            .ok_or_else(|| ApiError::Internal("order total overflows the satang range".into()))?;
+        priced.push(PricedNewLine {
+            id: line.id.clone(),
+            menu_item_id: line.menu_item_id.clone(),
+            item_name: item.name.clone(),
+            options: unit
+                .options
+                .iter()
+                .map(|o| OptionSnapshot {
+                    id: o.id.clone(),
+                    name: o.name.clone(),
+                    price_add: o.price_add,
+                })
+                .collect(),
+            quantity: line.quantity,
+            note: line.note.clone(),
+            unit_price: unit.unit_price,
+            line_total: line_amount,
+        });
+    }
+    Ok((priced, total_amount))
+}
+
+/// INSERT of one priced line, guarded by "the bill is still open": inside a
+/// batch it inserts nothing once the bill is paid/cancelled, so a line can
+/// never land on a closed bill (`create` inserts the bill first in the same
+/// batch, so the guard always holds there).
+fn line_insert(
+    env: &Env,
+    shop_id: &str,
+    order_id: &str,
+    line: &PricedNewLine,
+    now: i64,
+) -> Result<worker::D1PreparedStatement, ApiError> {
+    let options_json = serde_json::to_string(&line.options)
+        .map_err(|e| ApiError::Internal(format!("options serialization failed: {e}")))?;
+    Ok(db::db(env)?
+        .prepare(
+            "INSERT INTO order_items
+               (id, shop_id, order_id, menu_item_id, item_name, options_json,
+                quantity, note, unit_price, discount_amount, line_total,
+                created_at, updated_at)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, ?11
+             WHERE EXISTS (SELECT 1 FROM orders
+                           WHERE id = ?3 AND shop_id = ?2
+                             AND status IN ('preparing', 'served'))",
+        )
+        .bind(&[
+            txt(&line.id),
+            txt(shop_id),
+            txt(order_id),
+            txt(&line.menu_item_id),
+            txt(&line.item_name),
+            txt(&options_json),
+            int(line.quantity),
+            opt_txt(line.note.as_deref()),
+            int(line.unit_price),
+            int(line.line_total),
+            int(now),
+        ])?)
+}
+
+/// Rows changed by one statement (0 when D1 reports no meta).
+fn changes(result: &D1Result) -> Result<usize, ApiError> {
+    Ok(result.meta()?.and_then(|m| m.changes).unwrap_or(0))
+}
+
+/// Why a conditional transition matched no row: the bill is not in this shop
+/// (404) or is already in another status (409 naming it, so the POS reloads).
+async fn transition_refused(env: &Env, shop_id: &str, id: &str) -> ApiError {
+    match load_order(env, shop_id, id).await {
+        Ok(Some(order)) => ApiError::Conflict(format!("order is {}", order.status)),
+        Ok(None) => ApiError::NotFound,
+        Err(e) => e,
+    }
+}
+
+/// Cancel reason (3.15): mandatory, trimmed, 1..=200 characters.
+fn clean_cancel_reason(raw: &str) -> Result<String, ApiError> {
+    let reason = raw.trim();
+    if reason.is_empty() || reason.chars().count() > MAX_CANCEL_REASON_CHARS {
+        return Err(ApiError::BadRequest(format!(
+            "reason must be 1-{MAX_CANCEL_REASON_CHARS} characters"
+        )));
+    }
+    Ok(reason.to_owned())
+}
+
+/// The payment method a bill may close with (3.23, 4.2): counter bills take
+/// cash (PromptPay via Beam comes later), delivery bills are settled by the
+/// delivery app.
+fn validate_payment_method(channel: &str, method: &str) -> Result<(), ApiError> {
+    let expected = if channel == "counter" { "cash" } else { "delivery_app" };
+    if method == expected {
+        Ok(())
+    } else {
+        Err(ApiError::BadRequest(format!(
+            "a {channel} order is paid with {expected}, not '{method}'"
+        )))
+    }
+}
+
+/// (cash_received, cash_change) for a payment of `amount` satang (3.23). Cash
+/// must cover the bill and sit at most MAX_CASH_OVER above it (bigger = typo);
+/// any other method carries no cash fields.
+fn cash_fields(
+    method: &str,
+    amount: i64,
+    cash_received: Option<i64>,
+) -> Result<(Option<i64>, Option<i64>), ApiError> {
+    if method != "cash" {
+        return match cash_received {
+            None => Ok((None, None)),
+            Some(_) => Err(ApiError::BadRequest(
+                "cash_received is only for cash payments".into(),
+            )),
+        };
+    }
+    let Some(received) = cash_received else {
+        return Err(ApiError::BadRequest("cash_received is required for cash".into()));
+    };
+    if received < amount {
+        return Err(ApiError::BadRequest(format!(
+            "cash_received {received} does not cover the total {amount}"
+        )));
+    }
+    if received - amount > MAX_CASH_OVER {
+        return Err(ApiError::BadRequest(
+            "cash_received is implausibly far above the total".into(),
+        ));
+    }
+    Ok((Some(received), Some(received - amount)))
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -606,45 +835,7 @@ pub async fn create(
     // Price every line server-side from the shop's menu (the client never
     // sends prices).
     let menu = load_shop_pricing(env, &shop_id, &menu_item_ids(&lines)).await?;
-    let mut priced: Vec<PricedNewLine> = Vec::with_capacity(lines.len());
-    let mut total_amount = 0_i64;
-    for line in &lines {
-        let Some(item) = menu.items.get(&line.menu_item_id) else {
-            return Err(ApiError::BadRequest(format!(
-                "menu item {} is not on this shop's menu",
-                line.menu_item_id
-            )));
-        };
-        let unit = price_line(
-            &pricing_item(item),
-            &menu.groups,
-            &body.channel,
-            &menu.markup,
-            &line.option_ids,
-        )?;
-        let line_amount = line_total(unit.unit_price, line.quantity)?;
-        total_amount = total_amount
-            .checked_add(line_amount)
-            .ok_or_else(|| ApiError::Internal("order total overflows the satang range".into()))?;
-        priced.push(PricedNewLine {
-            id: line.id.clone(),
-            menu_item_id: line.menu_item_id.clone(),
-            item_name: item.name.clone(),
-            options: unit
-                .options
-                .iter()
-                .map(|o| OptionSnapshot {
-                    id: o.id.clone(),
-                    name: o.name.clone(),
-                    price_add: o.price_add,
-                })
-                .collect(),
-            quantity: line.quantity,
-            note: line.note.clone(),
-            unit_price: unit.unit_price,
-            line_total: line_amount,
-        });
-    }
+    let (priced, total_amount) = price_lines(&menu, &body.channel, &lines)?;
 
     let now = now_ms();
     let day_start = bangkok_day_start_ms(now);
@@ -677,31 +868,7 @@ pub async fn create(
         ])?];
 
     for line in &priced {
-        let options_json = serde_json::to_string(&line.options)
-            .map_err(|e| ApiError::Internal(format!("options serialization failed: {e}")))?;
-        statements.push(
-            db::db(env)?
-                .prepare(
-                    "INSERT INTO order_items
-                       (id, shop_id, order_id, menu_item_id, item_name, options_json,
-                        quantity, note, unit_price, discount_amount, line_total,
-                        created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, ?11)",
-                )
-                .bind(&[
-                    txt(&line.id),
-                    txt(&shop_id),
-                    txt(&order_id),
-                    txt(&line.menu_item_id),
-                    txt(&line.item_name),
-                    txt(&options_json),
-                    int(line.quantity),
-                    opt_txt(line.note.as_deref()),
-                    int(line.unit_price),
-                    int(line.line_total),
-                    int(now),
-                ])?,
-        );
+        statements.push(line_insert(env, &shop_id, &order_id, line, now)?);
     }
     db::db(env)?.batch(statements).await?;
 
@@ -791,6 +958,253 @@ pub async fn get_order(
         .await?
         .ok_or(ApiError::NotFound)?;
     Ok(Json(order))
+}
+
+/// The customer orders more (3.13): price the new lines with the BILL's
+/// channel and append them, then recompute the total from every line. One
+/// batch; each insert is guarded by "bill still open" (see [`line_insert`]),
+/// and the UPDATE's change count tells whether the bill was still open.
+#[worker::send]
+pub async fn add_items(
+    State(state): State<AppState>,
+    staff: StaffAuth,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<AddItemsBody>,
+) -> Result<Json<OrderJson>, ApiError> {
+    let order_id = parse_uuid(&id, "id")?.to_string();
+    let lines = parse_lines(&body.items)?;
+    let shop_id = staff.shop_id;
+    let env = &state.env;
+
+    let order = load_order(env, &shop_id, &order_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if !matches!(order.status.as_str(), "preparing" | "served") {
+        return Err(ApiError::Conflict(format!("order is {}", order.status)));
+    }
+    let line_ids: Vec<String> = lines.iter().map(|line| line.id.clone()).collect();
+    if let Some(line_id) = existing_line_id(env, &line_ids).await? {
+        return Err(ApiError::Conflict(format!("order line {line_id} already exists")));
+    }
+
+    let menu = load_shop_pricing(env, &shop_id, &menu_item_ids(&lines)).await?;
+    let (priced, _) = price_lines(&menu, &order.channel, &lines)?;
+
+    let now = now_ms();
+    let mut statements = Vec::with_capacity(priced.len() + 1);
+    for line in &priced {
+        statements.push(line_insert(env, &shop_id, &order_id, line, now)?);
+    }
+    // New plates go back to the kitchen: the bill is "preparing" again.
+    statements.push(
+        db::db(env)?
+            .prepare(
+                "UPDATE orders
+                 SET total_amount = MAX(0, (SELECT COALESCE(SUM(line_total), 0)
+                                            FROM order_items WHERE order_id = ?1)
+                                           - discount_amount),
+                     status = 'preparing', updated_at = ?2
+                 WHERE id = ?1 AND shop_id = ?3 AND status IN ('preparing', 'served')",
+            )
+            .bind(&[txt(&order_id), int(now), txt(&shop_id)])?,
+    );
+    let results = db::db(env)?.batch(statements).await?;
+    let updated = results.last().map(changes).transpose()?.unwrap_or(0);
+    if updated == 0 {
+        return Err(transition_refused(env, &shop_id, &order_id).await);
+    }
+    let order = load_order(env, &shop_id, &order_id)
+        .await?
+        .ok_or_else(|| ApiError::Internal(format!("order {order_id} vanished")))?;
+    Ok(Json(order))
+}
+
+/// Plate is up (3.14): preparing -> served.
+#[worker::send]
+pub async fn serve(
+    State(state): State<AppState>,
+    staff: StaffAuth,
+    Path(id): Path<String>,
+) -> Result<Json<OrderJson>, ApiError> {
+    let order_id = parse_uuid(&id, "id")?.to_string();
+    let env = &state.env;
+    let result = db::db(env)?
+        .prepare(
+            "UPDATE orders SET status = 'served', updated_at = ?1
+             WHERE id = ?2 AND shop_id = ?3 AND status = 'preparing'",
+        )
+        .bind(&[int(now_ms()), txt(&order_id), txt(&staff.shop_id)])?
+        .run()
+        .await?;
+    if changes(&result)? == 0 {
+        return Err(transition_refused(env, &staff.shop_id, &order_id).await);
+    }
+    let order = load_order(env, &staff.shop_id, &order_id)
+        .await?
+        .ok_or_else(|| ApiError::Internal(format!("order {order_id} vanished")))?;
+    Ok(Json(order))
+}
+
+/// Void an unpaid bill (3.15): reason + who + when are mandatory (schema
+/// CHECK). A paid bill is refused with 409 - refunds are owner-only (3.28).
+#[worker::send]
+pub async fn cancel(
+    State(state): State<AppState>,
+    staff: StaffAuth,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<CancelBody>,
+) -> Result<Json<OrderJson>, ApiError> {
+    let order_id = parse_uuid(&id, "id")?.to_string();
+    let reason = clean_cancel_reason(&body.reason)?;
+    let env = &state.env;
+    let now = now_ms();
+    let result = db::db(env)?
+        .prepare(
+            "UPDATE orders
+             SET status = 'cancelled', cancel_reason = ?1, cancelled_by = ?2,
+                 cancelled_at = ?3, closed_at = ?3, updated_at = ?3
+             WHERE id = ?4 AND shop_id = ?5 AND status IN ('preparing', 'served')",
+        )
+        .bind(&[
+            txt(&reason),
+            txt(&staff.user_id),
+            int(now),
+            txt(&order_id),
+            txt(&staff.shop_id),
+        ])?
+        .run()
+        .await?;
+    if changes(&result)? == 0 {
+        return Err(transition_refused(env, &staff.shop_id, &order_id).await);
+    }
+    let order = load_order(env, &staff.shop_id, &order_id)
+        .await?
+        .ok_or_else(|| ApiError::Internal(format!("order {order_id} vanished")))?;
+    Ok(Json(order))
+}
+
+#[derive(Debug, Deserialize)]
+struct PaymentRow {
+    id: String,
+    order_id: String,
+    method: String,
+    amount: i64,
+    cash_received: Option<i64>,
+    cash_change: Option<i64>,
+    status: String,
+}
+
+async fn load_payment(env: &Env, payment_id: &str) -> Result<Option<PaymentRow>, ApiError> {
+    Ok(db::db(env)?
+        .prepare(
+            "SELECT id, order_id, method, amount, cash_received, cash_change, status
+             FROM payments WHERE id = ?1",
+        )
+        .bind(&[txt(payment_id)])?
+        .first::<PaymentRow>(None)
+        .await?)
+}
+
+fn paid_json(order: OrderJson, p: PaymentRow) -> PaidJson {
+    PaidJson {
+        order,
+        payment: PaymentJson {
+            id: p.id,
+            method: p.method,
+            amount: p.amount,
+            cash_received: p.cash_received,
+            cash_change: p.cash_change,
+            status: p.status,
+        },
+    }
+}
+
+/// Close the bill (3.23, 4.2). The amount is the SERVER's orders.total_amount;
+/// the payment insert and the status change go in one batch, both guarded by
+/// "still open and the total is still the one the change was computed from",
+/// so a concurrent pay/cancel/add-lines can never double-charge or close a
+/// bill for the wrong amount. Idempotent by payment_id (offline retries).
+#[worker::send]
+pub async fn pay(
+    State(state): State<AppState>,
+    staff: StaffAuth,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<PayBody>,
+) -> Result<Json<PaidJson>, ApiError> {
+    let order_id = parse_uuid(&id, "id")?.to_string();
+    let payment_id = parse_uuid(&body.payment_id, "payment_id")?.to_string();
+    let shop_id = staff.shop_id;
+    let env = &state.env;
+
+    let order = load_order(env, &shop_id, &order_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    // Replay of a payment that already went through.
+    if let Some(existing) = load_payment(env, &payment_id).await? {
+        if existing.order_id != order_id {
+            return Err(ApiError::Conflict(format!(
+                "payment {payment_id} belongs to another order"
+            )));
+        }
+        return Ok(Json(paid_json(order, existing)));
+    }
+
+    if !matches!(order.status.as_str(), "preparing" | "served") {
+        return Err(ApiError::Conflict(format!("order is {}", order.status)));
+    }
+    validate_payment_method(&order.channel, &body.method)?;
+    let amount = order.total_amount;
+    let (cash_received, cash_change) = cash_fields(&body.method, amount, body.cash_received)?;
+
+    let now = now_ms();
+    let results = db::db(env)?
+        .batch(vec![
+            db::db(env)?
+                .prepare(
+                    "INSERT INTO payments
+                       (id, shop_id, order_id, method, amount, cash_received, cash_change,
+                        status, confirmed_by, created_by, created_at, updated_at)
+                     SELECT ?1, ?3, ?2, ?4, total_amount, ?5, ?6,
+                            'succeeded', NULL, ?7, ?8, ?8
+                     FROM orders
+                     WHERE id = ?2 AND shop_id = ?3 AND status IN ('preparing', 'served')
+                       AND total_amount = ?9",
+                )
+                .bind(&[
+                    txt(&payment_id),
+                    txt(&order_id),
+                    txt(&shop_id),
+                    txt(&body.method),
+                    opt_int(cash_received),
+                    opt_int(cash_change),
+                    txt(&staff.user_id),
+                    int(now),
+                    int(amount),
+                ])?,
+            db::db(env)?
+                .prepare(
+                    "UPDATE orders SET status = 'paid', paid_at = ?4, closed_at = ?4, updated_at = ?4
+                     WHERE id = ?2 AND shop_id = ?3 AND status IN ('preparing', 'served')
+                       AND EXISTS (SELECT 1 FROM payments WHERE id = ?1 AND order_id = ?2)",
+                )
+                .bind(&[txt(&payment_id), txt(&order_id), txt(&shop_id), int(now)])?,
+        ])
+        .await?;
+    let updated = results.last().map(changes).transpose()?.unwrap_or(0);
+    if updated == 0 {
+        // Lost a race: the bill closed or its total changed. Nothing was
+        // charged (the insert is guarded by the same condition).
+        return Err(transition_refused(env, &shop_id, &order_id).await);
+    }
+
+    let order = load_order(env, &shop_id, &order_id)
+        .await?
+        .ok_or_else(|| ApiError::Internal(format!("order {order_id} vanished")))?;
+    let payment = load_payment(env, &payment_id)
+        .await?
+        .ok_or_else(|| ApiError::Internal(format!("payment {payment_id} vanished")))?;
+    Ok(Json(paid_json(order, payment)))
 }
 
 // ---------------------------------------------------------------------------
@@ -1127,5 +1541,37 @@ mod tests {
                 .unwrap();
         assert_eq!(priced_ok.unit_price, 5000 + 1000);
         assert_eq!(priced_ok.options.len(), 1);
+    }
+
+    #[test]
+    fn cancel_reason_is_mandatory_and_bounded() {
+        assert!(bad(clean_cancel_reason("")).contains("reason"));
+        assert!(bad(clean_cancel_reason("   ")).contains("reason"));
+        assert_eq!(clean_cancel_reason("  keyed wrong ").unwrap(), "keyed wrong");
+        let max = "r".repeat(MAX_CANCEL_REASON_CHARS);
+        assert_eq!(clean_cancel_reason(&max).unwrap(), max);
+        assert!(bad(clean_cancel_reason(&format!("{max}r"))).contains("reason"));
+    }
+
+    #[test]
+    fn payment_method_follows_the_channel() {
+        assert!(validate_payment_method("counter", "cash").is_ok());
+        assert!(bad(validate_payment_method("counter", "delivery_app")).contains("cash"));
+        assert!(bad(validate_payment_method("counter", "promptpay")).contains("cash"));
+        for channel in ["grab", "lineman", "foodpanda"] {
+            assert!(validate_payment_method(channel, "delivery_app").is_ok());
+            assert!(bad(validate_payment_method(channel, "cash")).contains("delivery_app"));
+        }
+    }
+
+    #[test]
+    fn cash_must_cover_the_total_and_yields_change() {
+        assert_eq!(cash_fields("cash", 4500, Some(10_000)).unwrap(), (Some(10_000), Some(5500)));
+        assert_eq!(cash_fields("cash", 4500, Some(4500)).unwrap(), (Some(4500), Some(0)));
+        assert!(bad(cash_fields("cash", 4500, Some(4499))).contains("does not cover"));
+        assert!(bad(cash_fields("cash", 4500, None)).contains("required"));
+        assert!(bad(cash_fields("cash", 0, Some(MAX_CASH_OVER + 1))).contains("implausibly"));
+        assert_eq!(cash_fields("delivery_app", 4500, None).unwrap(), (None, None));
+        assert!(bad(cash_fields("delivery_app", 4500, Some(4500))).contains("only for cash"));
     }
 }
