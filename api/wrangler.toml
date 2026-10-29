@@ -2,25 +2,33 @@ name = "rice-pos-api"
 main = "build/worker/shim.mjs"
 compatibility_date = "2026-10-01"
 
+# One Worker serves POS (pos.) and owner app (owner., behind Cloudflare Access).
+# No workers.dev / preview URLs: every way in goes through our own hostnames.
+workers_dev = false
+preview_urls = false
+routes = [
+  { pattern = "pos.twostackmaxgame.win", custom_domain = true },
+  { pattern = "owner.twostackmaxgame.win", custom_domain = true },
+]
+
 [build]
 command = "worker-build --release"
 
 # ---------------------------------------------------------------------------
 # D1 — all POS data (schema v1, see migrations/)
-# database_id is a PLACEHOLDER for local dev only; replace with the real id
-# from `wrangler d1 create rice-pos` when we first deploy (later ticket).
-# Do NOT run anything remote with the placeholder id.
+# Remote DB created 2026-10-29 (APAC). Local dev uses .wrangler/state.
 # ---------------------------------------------------------------------------
 [[d1_databases]]
 binding = "DB"
 database_name = "rice-pos"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "eb902c69-455f-4c6d-bfdf-3eb8ef48618d"
 migrations_dir = "migrations"
 
 # R2 — menu images (WebP) now; daily backups/archives later (M5)
-[[r2_buckets]]
-binding = "MEDIA"
-bucket_name = "rice-pos-media"
+# Enable R2 in the dashboard first (M1 needs it for menu images), then uncomment.
+# [[r2_buckets]]
+# binding = "MEDIA"
+# bucket_name = "rice-pos-media"
 
 # Cloudflare Access (owner auth) — filled in a later ticket (M0).
 # ACCESS_TEAM_DOMAIN: e.g. "owner.example.com" team domain used to validate the JWT

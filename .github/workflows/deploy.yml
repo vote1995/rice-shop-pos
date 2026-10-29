@@ -1,0 +1,75 @@
+# CI: every push/PR runs checks; pushes to main also migrate D1 and deploy the
+# Worker (API + PWA assets) to pos./owner.twostackmaxgame.win.
+#
+# Required repo secrets: CLOUDFLARE_API_TOKEN (Workers Scripts:Edit, D1:Edit,
+# Workers Routes:Edit, Zone:Read for twostackmaxgame.win), CLOUDFLARE_ACCOUNT_ID.
+name: ci-deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: api
+      - name: clippy (wasm)
+        working-directory: api
+        run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
+      - name: unit tests (host)
+        working-directory: api
+        run: cargo test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: web build
+        working-directory: web
+        run: npm ci && npm run build
+
+  deploy:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: api
+          cache-bin: true
+      - name: install worker-build
+        run: command -v worker-build || cargo install worker-build --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: build web (served as Worker static assets)
+        working-directory: web
+        run: npm ci && npm run build
+      - name: migrate D1 (remote)
+        working-directory: api
+        run: npx --yes wrangler@4 d1 migrations apply rice-pos --remote
+      - name: deploy Worker
+        working-directory: api
+        run: npx --yes wrangler@4 deploy
