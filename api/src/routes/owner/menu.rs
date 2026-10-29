@@ -406,7 +406,8 @@ async fn shop_missing(env: &Env, shop_id: &str) -> Result<bool, ApiError> {
     Ok(found.is_none())
 }
 
-async fn load_menu_item(env: &Env, id: &str) -> Result<Option<MenuItem>, ApiError> {
+/// Loads one menu item by id (any shop) - shared with the staff menu routes.
+pub(crate) async fn load_menu_item(env: &Env, id: &str) -> Result<Option<MenuItem>, ApiError> {
     Ok(db::db(env)?
         .prepare(
             "SELECT id, shop_id, name, category, menu_type, base_price, price_2, price_3, \
@@ -440,7 +441,8 @@ async fn load_option_group(env: &Env, id: &str) -> Result<Option<OptionGroup>, A
         .await?)
 }
 
-async fn load_option(env: &Env, id: &str) -> Result<Option<MenuOption>, ApiError> {
+/// Loads one option by id (any shop) - shared with the staff menu routes.
+pub(crate) async fn load_option(env: &Env, id: &str) -> Result<Option<MenuOption>, ApiError> {
     Ok(db::db(env)?
         .prepare(
             "SELECT id, shop_id, option_group_id, name, price_add, sold_out, sort_order, \

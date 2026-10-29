@@ -5,6 +5,7 @@
 //! - [`routes`] — HTTP handlers, grouped per resource
 //! - [`db`]     — helpers around D1/R2 bindings
 //! - [`error`]  — the JSON error type used by every handler
+//! - [`pricing`] — the pure order-line pricing engine (no D1, no worker types)
 
 use axum::{
     routing::{get, post, put},
@@ -17,6 +18,7 @@ mod auth;
 mod db;
 mod error;
 mod extract;
+mod pricing;
 mod routes;
 mod util;
 
@@ -40,6 +42,18 @@ pub fn router(env: Env) -> Router {
         .route("/auth/pin", post(routes::staff_auth::pin))
         .route("/auth/logout", post(routes::staff_auth::logout))
         .route("/staff/me", get(routes::staff_auth::me))
+        // Staff POS menu (M1-1b): the session shop's saleable menu and the
+        // counter sold-out toggles (shop always from the session, never the
+        // request).
+        .route("/menu", get(routes::menu::staff_menu))
+        .route(
+            "/menu/items/{id}/sold-out",
+            post(routes::menu::item_sold_out),
+        )
+        .route(
+            "/menu/options/{id}/sold-out",
+            post(routes::menu::option_sold_out),
+        )
         .route("/owner/me", get(routes::owner::me))
         .route(
             "/owner/shops",

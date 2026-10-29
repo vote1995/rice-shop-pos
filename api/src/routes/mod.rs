@@ -3,6 +3,7 @@
 
 pub mod device;
 pub mod health;
+pub mod menu;
 pub mod owner;
 pub mod staff_auth;
 
