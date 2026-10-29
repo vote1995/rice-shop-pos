@@ -1,2 +1,5 @@
 DEV_OWNER_EMAIL=owner@example.com
 PIN_PEPPER=change-me-dev-only
+# Local dev only: empty AUD + DEV_OWNER_EMAIL = owner auth bypass (overrides wrangler.toml [vars]).
+ACCESS_AUD=
+ACCESS_TEAM_DOMAIN=

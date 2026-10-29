@@ -7,7 +7,7 @@
 //! - [`error`]  — the JSON error type used by every handler
 
 use axum::{
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
 use tower_service::Service;
@@ -44,6 +44,36 @@ pub fn router(env: Env) -> Router {
         .route(
             "/owner/shops",
             get(routes::owner::shops::list).post(routes::owner::shops::create),
+        )
+        // Menu master data of one shop (M1-1a): menu items, option groups,
+        // options and the per-channel delivery markup.
+        .route(
+            "/owner/shops/{shop_id}/menu",
+            get(routes::owner::menu::shop_menu),
+        )
+        .route(
+            "/owner/shops/{shop_id}/channel-markup",
+            put(routes::owner::menu::put_channel_markup),
+        )
+        .route("/owner/menu-items", post(routes::owner::menu::create_menu_item))
+        .route(
+            "/owner/menu-items/{id}",
+            put(routes::owner::menu::update_menu_item),
+        )
+        .route(
+            "/owner/option-groups",
+            post(routes::owner::menu::create_option_group),
+        )
+        .route(
+            "/owner/option-groups/{id}",
+            put(routes::owner::menu::update_option_group)
+                .delete(routes::owner::menu::delete_option_group),
+        )
+        .route("/owner/options", post(routes::owner::menu::create_option))
+        .route(
+            "/owner/options/{id}",
+            put(routes::owner::menu::update_option)
+                .delete(routes::owner::menu::delete_option),
         )
         .route(
             "/owner/staff",

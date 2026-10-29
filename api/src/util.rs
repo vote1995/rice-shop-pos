@@ -27,6 +27,22 @@ pub(crate) fn int(v: i64) -> JsValue {
     JsValue::from_f64(v as f64)
 }
 
+/// Optional integer/text binds: NULL when absent (nullable columns). Used by
+/// the menu endpoints (menu_items.price_2/price_3, option_groups.menu_item_id, ...).
+pub(crate) fn opt_int(v: Option<i64>) -> JsValue {
+    match v {
+        Some(v) => int(v),
+        None => JsValue::NULL,
+    }
+}
+
+pub(crate) fn opt_txt(v: Option<&str>) -> JsValue {
+    match v {
+        Some(v) => txt(v),
+        None => JsValue::NULL,
+    }
+}
+
 /// Names of shops/staff/devices: trimmed, non-empty, at most 100 characters.
 pub(crate) fn clean_name(raw: &str) -> Result<String, ApiError> {
     let name = raw.trim();

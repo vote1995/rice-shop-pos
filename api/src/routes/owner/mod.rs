@@ -10,12 +10,14 @@
 //! - `GET  /owner/devices?status=`       list devices (never token hashes)
 //! - `POST /owner/devices/{id}/approve`  pending -> approved
 //! - `POST /owner/devices/{id}/revoke`   -> revoked (idempotent)
+//! - menu CRUD lives in [`menu`] (M1-1a)
 //!
 //! The generic helpers (`now_ms`, `txt`, `int`, `clean_name`, `parse_uuid`)
 //! moved to `crate::util` in M0-2b, when the device/staff endpoints started
 //! needing them too.
 
 pub mod devices;
+pub mod menu;
 pub mod shops;
 pub mod staff;
 
