@@ -758,7 +758,7 @@ export default function MenuEditor() {
 
       <section className="card">
         <h2>ค่าส่วนต่างเดลิเวอรี่</h2>
-        <p className="muted small">ใช้กับเมนูตามสั่งที่ไม่ได้ตั้งราคาแอปเอง — ราคาในแอป = ราคาหน้าร้าน + ค่าส่วนต่าง</p>
+        <p className="muted small">บวกราคาเมื่อขายผ่านแอปเดลิเวอรี่ ใช้กับทุกประเภท — ราคาในแอป = ราคาหน้าร้าน + ค่าส่วนต่าง</p>
         {markupMsg ? (
           <p className={`${markupMsg.bad ? 'error' : 'muted'} small`} role="status">
             {markupMsg.text}

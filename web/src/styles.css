@@ -107,8 +107,16 @@ button:disabled { opacity: 0.45; cursor: default; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* owner dashboard */
-.tabs { display: flex; gap: 8px; width: 100%; max-width: 900px; margin: 0 auto; padding: 12px 16px 0; overflow-x: auto; }
-.tabs > .btn { flex: none; white-space: nowrap; }
+.tabs {
+  display: flex; gap: 8px; width: 100%; max-width: 900px; margin: 0 auto; padding: 12px 16px 8px;
+  flex: none; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity; scroll-padding-inline: 16px; scrollbar-width: none;
+  /* fade the right edge: tells the thumb there are more tabs to swipe to */
+  -webkit-mask-image: linear-gradient(to right, #000 85%, transparent);
+  mask-image: linear-gradient(to right, #000 85%, transparent);
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tabs > .btn { flex: none; white-space: nowrap; scroll-snap-align: start; }
 .owner-main {
   flex: 1; width: 100%; max-width: 900px; margin: 0 auto; padding: 16px;
   display: flex; flex-direction: column; gap: 14px;
