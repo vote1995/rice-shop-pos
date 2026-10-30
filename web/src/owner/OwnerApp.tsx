@@ -71,13 +71,15 @@ export default function OwnerApp() {
         <span className="brand">POS ร้านข้าว · เจ้าของ</span>
         <span className="muted small">{me ? me.email : '…'}</span>
       </header>
-      <nav className="tabs" role="tablist" aria-label="เมนูเจ้าของร้าน">
+      <div className="tabs-wrap">
+        <nav className="tabs" role="tablist" aria-label="เมนูเจ้าของร้าน">
         {TABS.map((t) => (
           <button key={t.id} role="tab" aria-selected={tab === t.id} className="btn" onClick={() => setTab(t.id)}>
             {t.label}
           </button>
         ))}
-      </nav>
+        </nav>
+      </div>
       <main className="owner-main">
         {msg ? (
           <p className="error" role="alert">
