@@ -888,6 +888,13 @@ pub async fn delete_option_group(
 
     db::db(env)?
         .batch(vec![
+            // Recipe rows of these options go first (FK, migration 0005).
+            db::db(env)?
+                .prepare(
+                    "DELETE FROM recipe_uses
+                     WHERE option_id IN (SELECT id FROM options WHERE option_group_id = ?1)",
+                )
+                .bind(&[txt(&id)])?,
             db::db(env)?
                 .prepare("DELETE FROM options WHERE option_group_id = ?1")
                 .bind(&[txt(&id)])?,
@@ -1016,9 +1023,15 @@ pub async fn delete_option(
     load_option(env, &id).await?.ok_or(ApiError::NotFound)?;
 
     db::db(env)?
-        .prepare("DELETE FROM options WHERE id = ?1")
-        .bind(&[txt(&id)])?
-        .run()
+        .batch(vec![
+            // Its recipe rows first (FK, migration 0005).
+            db::db(env)?
+                .prepare("DELETE FROM recipe_uses WHERE option_id = ?1")
+                .bind(&[txt(&id)])?,
+            db::db(env)?
+                .prepare("DELETE FROM options WHERE id = ?1")
+                .bind(&[txt(&id)])?,
+        ])
         .await?;
     Ok(Json(json!({ "id": id, "deleted": true })))
 }

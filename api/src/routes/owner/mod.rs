@@ -22,6 +22,7 @@ pub mod menu;
 pub mod orders;
 pub mod shops;
 pub mod staff;
+pub mod stock;
 
 use axum::Json;
 use serde_json::{json, Value};

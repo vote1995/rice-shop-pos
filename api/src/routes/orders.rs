@@ -32,7 +32,7 @@
 //! server-side `orders.total_amount`. Refunding a paid bill is owner-only
 //! (3.28, later ticket), which is why `cancel` refuses a paid bill with a 409.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use axum::{
     extract::{Path, State},
@@ -49,7 +49,7 @@ use crate::extract::ApiJson;
 use crate::pricing::{line_total, price_line, PricingGroup, PricingItem, PricingOption};
 use crate::routes::owner::menu::{MenuItem, MenuOption, OptionGroup};
 use crate::util::{int, now_ms, opt_int, opt_txt, parse_uuid, txt};
-use crate::{db, error::ApiError, AppState};
+use crate::{db, error::ApiError, stock, AppState};
 
 /// Bangkok is UTC+7 all year (no DST), so the sale day boundary is a fixed
 /// offset from UTC.
@@ -84,7 +84,8 @@ const OPTION_COLUMNS: &str = "id, shop_id, option_group_id, name, price_add, sol
      sort_order, created_at, updated_at";
 /// One orders row: exactly the fields the order JSON needs.
 const ORDER_COLUMNS: &str = "id, queue_number, order_type, channel, table_no, note, status, \
-     total_amount, discount_amount, created_by, created_at, paid_at, cancelled_at, cancel_reason";
+     total_amount, discount_amount, created_by, created_at, paid_at, cancelled_at, cancel_reason, \
+     served_at";
 /// One order_items row: the JSON fields plus `order_id` to group lines under
 /// their bill.
 const ITEM_COLUMNS_SQL: &str = "id, order_id, menu_item_id, item_name, options_json, quantity, \
@@ -185,6 +186,8 @@ pub struct OrderJson {
     pub paid_at: Option<i64>,
     pub cancelled_at: Option<i64>,
     pub cancel_reason: Option<String>,
+    /// NULL = the plates are not out yet (a paid bill can still be cooking).
+    pub served_at: Option<i64>,
     pub items: Vec<OrderItemJson>,
 }
 
@@ -231,6 +234,7 @@ struct OrderRow {
     paid_at: Option<i64>,
     cancelled_at: Option<i64>,
     cancel_reason: Option<String>,
+    served_at: Option<i64>,
 }
 
 /// One order_items row as D1 returns it.
@@ -505,6 +509,7 @@ fn order_json(order: OrderRow, items: Vec<OrderItemJson>) -> OrderJson {
         paid_at: order.paid_at,
         cancelled_at: order.cancelled_at,
         cancel_reason: order.cancel_reason,
+        served_at: order.served_at,
         items,
     }
 }
@@ -659,13 +664,29 @@ fn price_lines(
             &line.option_ids,
         )?;
         let line_amount = line_total(unit.unit_price, line.quantity)?;
+        // A "quick" item (drinks, snacks: base 0, one pick-one list) is named
+        // by its pick - "ชาเย็น", not "เครื่องดื่ม ชาเย็น".
+        let own_groups: Vec<&PricingGroup> = menu
+            .groups
+            .iter()
+            .filter(|g| g.menu_item_id.as_deref().is_none_or(|m| m == item.id))
+            .collect();
+        let quick = item.base_price == 0
+            && own_groups.len() == 1
+            && own_groups[0].max_select == Some(1)
+            && unit.options.len() == 1;
+        let item_name = if quick {
+            unit.options[0].name.clone()
+        } else {
+            item.name.clone()
+        };
         total_amount = total_amount
             .checked_add(line_amount)
             .ok_or_else(|| ApiError::Internal("order total overflows the satang range".into()))?;
         priced.push(PricedNewLine {
             id: line.id.clone(),
             menu_item_id: line.menu_item_id.clone(),
-            item_name: item.name.clone(),
+            item_name,
             options: unit
                 .options
                 .iter()
@@ -721,6 +742,28 @@ fn line_insert(
             int(line.line_total),
             int(now),
         ])?)
+}
+
+/// The ingredient deduction for these lines (recipe x quantity), as batch
+/// statements guarded by the first line's insert (see [`stock::sale_statements`]).
+/// Empty when the shop keeps no recipe for anything sold here.
+async fn stock_deduction(
+    env: &Env,
+    shop_id: &str,
+    order_id: &str,
+    user_id: &str,
+    lines: &[NewLine],
+    now: i64,
+) -> Result<Vec<worker::D1PreparedStatement>, ApiError> {
+    let Some(first) = lines.first() else {
+        return Ok(Vec::new());
+    };
+    let uses = stock::load_uses(env, shop_id).await?;
+    let mut usage = BTreeMap::new();
+    for line in lines {
+        stock::add_line_usage(&uses, &line.menu_item_id, &line.option_ids, line.quantity, &mut usage);
+    }
+    stock::sale_statements(env, shop_id, order_id, user_id, &first.id, &usage, now)
 }
 
 /// Rows changed by one statement (0 when D1 reports no meta). Also used by the
@@ -880,6 +923,7 @@ pub async fn create(
     for line in &priced {
         statements.push(line_insert(env, &shop_id, &order_id, line, now)?);
     }
+    statements.extend(stock_deduction(env, &shop_id, &order_id, &staff.user_id, &lines, now).await?);
     db::db(env)?.batch(statements).await?;
 
     // The stored queue number was computed by the INSERT above, so read the
@@ -1005,6 +1049,7 @@ pub async fn add_items(
     for line in &priced {
         statements.push(line_insert(env, &shop_id, &order_id, line, now)?);
     }
+    statements.extend(stock_deduction(env, &shop_id, &order_id, &staff.user_id, &lines, now).await?);
     // New plates go back to the kitchen: the bill is "preparing" again.
     statements.push(
         db::db(env)?
@@ -1013,7 +1058,7 @@ pub async fn add_items(
                  SET total_amount = MAX(0, (SELECT COALESCE(SUM(line_total), 0)
                                             FROM order_items WHERE order_id = ?1)
                                            - discount_amount),
-                     status = 'preparing', updated_at = ?2
+                     status = 'preparing', served_at = NULL, updated_at = ?2
                  WHERE id = ?1 AND shop_id = ?3 AND status IN ('preparing', 'served')",
             )
             .bind(&[txt(&order_id), int(now), txt(&shop_id)])?,
@@ -1029,30 +1074,92 @@ pub async fn add_items(
     Ok(Json(order))
 }
 
-/// Plate is up (3.14): preparing -> served.
+/// How long "เลิกทำ" (undo) after marking a bill served stays possible.
+const UNSERVE_WINDOW_MS: i64 = 10 * 60 * 1000;
+
+/// Plate is up (3.14): stamps served_at. preparing -> served; a bill paid
+/// before the food came out stays 'paid' and just gets served_at (it then
+/// leaves the kitchen queue).
 #[worker::send]
 pub async fn serve(
     State(state): State<AppState>,
     staff: StaffAuth,
     Path(id): Path<String>,
 ) -> Result<Json<OrderJson>, ApiError> {
-    let order_id = parse_uuid(&id, "id")?.to_string();
-    let env = &state.env;
+    serve_transition(
+        &state.env,
+        &staff.shop_id,
+        &id,
+        "UPDATE orders
+         SET status = CASE status WHEN 'preparing' THEN 'served' ELSE status END,
+             served_at = ?1, updated_at = ?1
+         WHERE id = ?2 AND shop_id = ?3 AND served_at IS NULL
+           AND status IN ('preparing', 'paid')",
+    )
+    .await
+}
+
+/// Undo of [`serve`] within [`UNSERVE_WINDOW_MS`] (a mis-tap on the queue):
+/// served -> preparing, or a paid bill back to "still cooking".
+#[worker::send]
+pub async fn unserve(
+    State(state): State<AppState>,
+    staff: StaffAuth,
+    Path(id): Path<String>,
+) -> Result<Json<OrderJson>, ApiError> {
+    let sql = format!(
+        "UPDATE orders
+         SET status = CASE status WHEN 'served' THEN 'preparing' ELSE status END,
+             served_at = NULL, updated_at = ?1
+         WHERE id = ?2 AND shop_id = ?3 AND served_at >= ?1 - {UNSERVE_WINDOW_MS}
+           AND status IN ('served', 'paid')"
+    );
+    serve_transition(&state.env, &staff.shop_id, &id, &sql).await
+}
+
+/// Runs one served_at transition (?1 now, ?2 order id, ?3 shop id).
+async fn serve_transition(
+    env: &Env,
+    shop_id: &str,
+    id: &str,
+    sql: &str,
+) -> Result<Json<OrderJson>, ApiError> {
+    let order_id = parse_uuid(id, "id")?.to_string();
     let result = db::db(env)?
-        .prepare(
-            "UPDATE orders SET status = 'served', updated_at = ?1
-             WHERE id = ?2 AND shop_id = ?3 AND status = 'preparing'",
-        )
-        .bind(&[int(now_ms()), txt(&order_id), txt(&staff.shop_id)])?
+        .prepare(sql)
+        .bind(&[int(now_ms()), txt(&order_id), txt(shop_id)])?
         .run()
         .await?;
     if changes(&result)? == 0 {
-        return Err(transition_refused(env, &staff.shop_id, &order_id).await);
+        return Err(transition_refused(env, shop_id, &order_id).await);
     }
-    let order = load_order(env, &staff.shop_id, &order_id)
+    let order = load_order(env, shop_id, &order_id)
         .await?
         .ok_or_else(|| ApiError::Internal(format!("order {order_id} vanished")))?;
     Ok(Json(order))
+}
+
+/// Cancel UPDATE + stock put-back as one batch (shared with the owner cancel).
+/// Returns whether the bill was cancelled by THIS call.
+pub(crate) async fn cancel_with_restock(
+    env: &Env,
+    shop_id: &str,
+    order_id: &str,
+    user_id: &str,
+    reason: &str,
+) -> Result<bool, ApiError> {
+    let now = now_ms();
+    let mut statements = vec![db::db(env)?
+        .prepare(
+            "UPDATE orders
+             SET status = 'cancelled', cancel_reason = ?1, cancelled_by = ?2,
+                 cancelled_at = ?3, closed_at = ?3, updated_at = ?3
+             WHERE id = ?4 AND shop_id = ?5 AND status IN ('preparing', 'served')",
+        )
+        .bind(&[txt(reason), txt(user_id), int(now), txt(order_id), txt(shop_id)])?];
+    statements.extend(stock::restore_statements(env, shop_id, order_id, user_id, now)?);
+    let results = db::db(env)?.batch(statements).await?;
+    Ok(results.first().map(changes).transpose()?.unwrap_or(0) > 0)
 }
 
 /// Void an unpaid bill (3.15): reason + who + when are mandatory (schema
@@ -1067,24 +1174,7 @@ pub async fn cancel(
     let order_id = parse_uuid(&id, "id")?.to_string();
     let reason = clean_cancel_reason(&body.reason)?;
     let env = &state.env;
-    let now = now_ms();
-    let result = db::db(env)?
-        .prepare(
-            "UPDATE orders
-             SET status = 'cancelled', cancel_reason = ?1, cancelled_by = ?2,
-                 cancelled_at = ?3, closed_at = ?3, updated_at = ?3
-             WHERE id = ?4 AND shop_id = ?5 AND status IN ('preparing', 'served')",
-        )
-        .bind(&[
-            txt(&reason),
-            txt(&staff.user_id),
-            int(now),
-            txt(&order_id),
-            txt(&staff.shop_id),
-        ])?
-        .run()
-        .await?;
-    if changes(&result)? == 0 {
+    if !cancel_with_restock(env, &staff.shop_id, &order_id, &staff.user_id, &reason).await? {
         return Err(transition_refused(env, &staff.shop_id, &order_id).await);
     }
     let order = load_order(env, &staff.shop_id, &order_id)
@@ -1396,6 +1486,7 @@ mod tests {
             paid_at: None,
             cancelled_at: None,
             cancel_reason: None,
+            served_at: None,
         }
     }
 

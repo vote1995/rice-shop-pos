@@ -42,7 +42,8 @@ use super::query_param;
 use crate::auth::owner::OwnerAuth;
 use crate::extract::ApiJson;
 use crate::routes::orders::{
-    bangkok_day_start_ms, changes, clean_cancel_reason, load_order, transition_refused,
+    bangkok_day_start_ms, cancel_with_restock, changes, clean_cancel_reason, load_order,
+    transition_refused,
     OrderItemJson, OrderJson, OptionSnapshot,
 };
 use crate::util::{int, now_ms, parse_uuid, txt};
@@ -64,7 +65,8 @@ const MAX_DAY_ORDERS: i64 = 500;
 /// `order_id` rides along on items and payments only to group them under
 /// their bill.
 const ORDER_COLUMNS: &str = "id, queue_number, order_type, channel, table_no, note, status, \
-     total_amount, discount_amount, created_by, created_at, paid_at, cancelled_at, cancel_reason";
+     total_amount, discount_amount, created_by, created_at, paid_at, cancelled_at, cancel_reason, \
+     served_at";
 const ITEM_COLUMNS: &str = "id, order_id, menu_item_id, item_name, options_json, quantity, \
      note, unit_price, discount_amount, line_total";
 const PAYMENT_COLUMNS: &str = "id, order_id, method, amount, cash_received, cash_change, \
@@ -169,6 +171,7 @@ struct OrderRow {
     paid_at: Option<i64>,
     cancelled_at: Option<i64>,
     cancel_reason: Option<String>,
+    served_at: Option<i64>,
 }
 
 /// One order_items row of the day window.
@@ -461,6 +464,7 @@ fn order_json(row: OrderRow, items: Vec<OrderItemJson>) -> OrderJson {
         paid_at: row.paid_at,
         cancelled_at: row.cancelled_at,
         cancel_reason: row.cancel_reason,
+        served_at: row.served_at,
         items,
     }
 }
@@ -744,24 +748,7 @@ pub async fn cancel(
         .ok_or(ApiError::NotFound)?;
     let env = &state.env;
 
-    let now = now_ms();
-    let result = db::db(env)?
-        .prepare(
-            "UPDATE orders
-             SET status = 'cancelled', cancel_reason = ?1, cancelled_by = ?2,
-                 cancelled_at = ?3, closed_at = ?3, updated_at = ?3
-             WHERE id = ?4 AND shop_id = ?5 AND status IN ('preparing', 'served')",
-        )
-        .bind(&[
-            txt(&reason),
-            txt(&owner.user_id),
-            int(now),
-            txt(&order_id),
-            txt(&shop_id),
-        ])?
-        .run()
-        .await?;
-    if changes(&result)? == 0 {
+    if !cancel_with_restock(env, &shop_id, &order_id, &owner.user_id, &reason).await? {
         return Err(transition_refused(env, &shop_id, &order_id).await);
     }
     let order = load_order(env, &shop_id, &order_id)
@@ -1125,6 +1112,7 @@ mod tests {
             paid_at: None,
             cancelled_at: None,
             cancel_reason: None,
+            served_at: None,
         }
     }
 

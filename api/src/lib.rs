@@ -22,6 +22,7 @@ mod extract;
 mod media;
 mod pricing;
 mod routes;
+mod stock;
 mod util;
 
 /// Shared handler state. `Env` is cheap to clone (a handle to the Workers
@@ -64,6 +65,7 @@ pub fn router(env: Env) -> Router {
         .route("/orders/{id}", get(routes::orders::get_order))
         .route("/orders/{id}/items", post(routes::orders::add_items))
         .route("/orders/{id}/serve", post(routes::orders::serve))
+        .route("/orders/{id}/unserve", post(routes::orders::unserve))
         .route("/orders/{id}/cancel", post(routes::orders::cancel))
         .route("/orders/{id}/pay", post(routes::orders::pay))
         .route("/media/{*key}", get(routes::media::get_media))
@@ -73,6 +75,12 @@ pub fn router(env: Env) -> Router {
             put(routes::owner::media::put_image).delete(routes::owner::media::delete_image),
         )
         .route("/owner/media-usage", get(routes::owner::media::usage))
+        .route("/owner/shops/{shop_id}/stock", get(routes::owner::stock::shop_stock))
+        .route("/owner/ingredients", post(routes::owner::stock::create_ingredient))
+        .route("/owner/ingredients/{id}", put(routes::owner::stock::update_ingredient))
+        .route("/owner/ingredients/{id}/restock", post(routes::owner::stock::restock))
+        .route("/owner/ingredients/{id}/count", post(routes::owner::stock::count))
+        .route("/owner/recipe", put(routes::owner::stock::put_recipe))
         // Owner order view, discounts, cancel, refunds (M1-4a).
         .route(
             "/owner/shops/{shop_id}/orders",
