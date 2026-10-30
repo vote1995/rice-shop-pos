@@ -1336,7 +1336,7 @@ export default function Counter({
       return g.group.required ? { text: '', color: MUTED } : { text: ' · ไม่เลือกก็ได้', color: MUTED }
     }
     return g.group.max_select === null
-      ? { text: ' · เลือกได้หลายอย่าง', color: MUTED }
+      ? { text: ' · ติ๊กเพื่อใส่ (ไม่ติ๊ก = ไม่ใส่)', color: MUTED }
       : { text: ` · เลือกได้สูงสุด ${g.group.max_select} อย่าง`, color: MUTED }
   }
 
@@ -1364,7 +1364,7 @@ export default function Counter({
     const inCart = quick ? cartQtyOf(type.id, o.id) : 0
     const label = quick
       ? `${o.name} ${baht(optionPrice(type, o))}${inCart > 0 ? `  ×${inCart}` : ''}`
-      : `${o.name}${o.price_add > 0 ? ` +${fmtBaht(o.price_add)}` : ''}`
+      : `${g.group.max_select !== 1 ? (on ? '☑ ' : '☐ ') : ''}${o.name}${o.price_add > 0 ? ` +${fmtBaht(o.price_add)}` : ''}`
     return (
       <LongPressButton
         key={o.id}

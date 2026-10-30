@@ -106,7 +106,7 @@ pub fn router(env: Env) -> Router {
         .route("/owner/menu-items", post(routes::owner::menu::create_menu_item))
         .route(
             "/owner/menu-items/{id}",
-            put(routes::owner::menu::update_menu_item),
+            put(routes::owner::menu::update_menu_item).delete(routes::owner::menu::delete_menu_item),
         )
         .route(
             "/owner/option-groups",

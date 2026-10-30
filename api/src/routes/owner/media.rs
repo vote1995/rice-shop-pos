@@ -30,7 +30,7 @@ fn quota_error(message: &str) -> ApiError {
 
 /// Best-effort removal of an object we no longer reference. DeleteObject is
 /// free (no quota). A failure only leaves an orphan: logged, never surfaced.
-async fn remove_object(env: &Env, key: &str) {
+pub(crate) async fn remove_object(env: &Env, key: &str) {
     let result = async {
         db::media(env)?.delete(key).await?;
         db::db(env)?

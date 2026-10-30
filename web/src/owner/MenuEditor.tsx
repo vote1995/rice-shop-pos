@@ -54,8 +54,8 @@ type GroupMode = 'one' | 'opt' | 'many'
 
 const MODE_LABEL: Record<GroupMode, string> = {
   one: 'ต้องเลือก 1',
-  opt: 'เลือก 1 / ไม่เลือก',
-  many: 'เลือกได้หลายอย่าง',
+  opt: 'เลือก 1 หรือไม่เลือก',
+  many: 'ติ๊กใส่ได้ (ไม่ติ๊ก = ไม่ใส่)',
 }
 
 const NEXT_MODE: Record<GroupMode, GroupMode> = { one: 'opt', opt: 'many', many: 'one' }
@@ -372,16 +372,16 @@ export default function MenuEditor() {
   }
 
   // "+ เพิ่มหัวข้อ": pick-one group หัวข้อใหม่ with one seeded choice.
-  async function addList(it: MenuItem) {
+  // "+ เพิ่มของเสริม": a tick list (optional, many) - unticked = not added.
+  async function addList(it: MenuItem, mode: GroupMode = 'one') {
     if (!shopId) return
     try {
       const g = await api<OptionGroup>('POST', '/api/owner/option-groups', {
         id: crypto.randomUUID(),
         shop_id: shopId,
         menu_item_id: it.id,
-        name: 'หัวข้อใหม่',
-        required: true,
-        max_select: 1,
+        name: mode === 'many' ? 'ของเพิ่ม' : 'หัวข้อใหม่',
+        ...modeFields(mode),
         tier_pricing: false,
         sort_order: null,
       })
@@ -415,6 +415,20 @@ export default function MenuEditor() {
       upsertOption(o)
       setFocusOptId(o.id)
       flash('บันทึกแล้ว')
+    } catch (e) {
+      flash(friendlyError(e), true)
+    }
+  }
+
+  // Never-sold types are deleted for real; ones on old bills are hidden
+  // (server decides, `archived` says which). Either way they leave both apps.
+  async function deleteType(it: MenuItem) {
+    if (!window.confirm(`ลบประเภท "${it.name}"? หัวข้อและตัวเลือกทั้งหมดจะหายไปจากหน้าขาย`)) return
+    try {
+      const r = await api<{ archived: boolean }>('DELETE', `/api/owner/menu-items/${encodeURIComponent(it.id)}`)
+      setData((prev) => (prev ? { ...prev, items: prev.items.filter((x) => x.id !== it.id) } : prev))
+      setEditId(null)
+      flash(r.archived ? 'ลบแล้ว (บิลเก่ายังเก็บไว้)' : 'ลบแล้ว')
     } catch (e) {
       flash(friendlyError(e), true)
     }
@@ -681,7 +695,23 @@ export default function MenuEditor() {
           disabled={!shopId}
           onClick={() => void addList(it)}
         >
-          + เพิ่มหัวข้อ (เช่น เส้น, น้ำซุป, เพิ่ม)
+          + เพิ่มหัวข้อ (เช่น เส้น, น้ำซุป)
+        </button>
+        <button
+          className="btn ghost"
+          style={{ minHeight: 48, borderColor: 'var(--green)', color: 'var(--green-dark)' }}
+          disabled={!shopId}
+          onClick={() => void addList(it, 'many')}
+        >
+          + เพิ่มของเสริม (ติ๊ก = ใส่, ไม่ติ๊ก = ไม่ใส่)
+        </button>
+        <button
+          className="btn danger"
+          style={{ minHeight: 48, marginTop: 16 }}
+          disabled={busy}
+          onClick={() => void deleteType(it)}
+        >
+          ลบประเภท "{it.name}"
         </button>
       </section>
     )

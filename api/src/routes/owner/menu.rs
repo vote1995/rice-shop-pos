@@ -498,7 +498,7 @@ pub async fn shop_menu(
              grab_price, lineman_price, foodpanda_price, cost, image_key, sold_out, status, \
              sort_order, created_at, updated_at
              FROM menu_items
-             WHERE shop_id = ?1
+             WHERE shop_id = ?1 AND deleted_at IS NULL
              ORDER BY sort_order, created_at, id",
         )
         .bind(&[txt(&shop_id)])?
@@ -1232,4 +1232,58 @@ mod tests {
         };
         assert_eq!(normalize_channel_markup(&empty).unwrap(), json!({}));
     }
+}
+
+/// Delete a menu type (migration 0006). Never sold -> the item, its lists,
+/// their choices and every recipe row go for real (one batch), plus its photo.
+/// On old bills -> hidden instead (deleted_at + inactive), so bills/reports
+/// keep their FK rows. Either way it leaves the editor and the counter.
+#[worker::send]
+pub async fn delete_menu_item(
+    State(state): State<AppState>,
+    _owner: OwnerAuth,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let id = parse_uuid(&id, "id")?.to_string();
+    let env = &state.env;
+    let item = load_menu_item(env, &id).await?.ok_or(ApiError::NotFound)?;
+    let sold = db::db(env)?
+        .prepare("SELECT 1 AS one FROM order_items WHERE menu_item_id = ?1 LIMIT 1")
+        .bind(&[txt(&id)])?
+        .first::<i64>(Some("one"))
+        .await?
+        .is_some();
+
+    if sold {
+        db::db(env)?
+            .prepare(
+                "UPDATE menu_items SET status = 'inactive', deleted_at = ?1, updated_at = ?1
+                 WHERE id = ?2",
+            )
+            .bind(&[int(now_ms()), txt(&id)])?
+            .run()
+            .await?;
+        return Ok(Json(json!({ "id": id, "deleted": true, "archived": true })));
+    }
+
+    const GROUPS: &str = "SELECT id FROM option_groups WHERE menu_item_id = ?1";
+    let stmt = |sql: String| -> Result<worker::D1PreparedStatement, ApiError> {
+        Ok(db::db(env)?.prepare(sql).bind(&[txt(&id)])?)
+    };
+    db::db(env)?
+        .batch(vec![
+            stmt(format!(
+                "DELETE FROM recipe_uses
+                 WHERE menu_item_id = ?1
+                    OR option_id IN (SELECT id FROM options WHERE option_group_id IN ({GROUPS}))"
+            ))?,
+            stmt(format!("DELETE FROM options WHERE option_group_id IN ({GROUPS})"))?,
+            stmt("DELETE FROM option_groups WHERE menu_item_id = ?1".into())?,
+            stmt("DELETE FROM menu_items WHERE id = ?1".into())?,
+        ])
+        .await?;
+    if let Some(key) = &item.image_key {
+        crate::routes::owner::media::remove_object(env, key).await;
+    }
+    Ok(Json(json!({ "id": id, "deleted": true, "archived": false })))
 }

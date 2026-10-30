@@ -71,7 +71,7 @@ pub async fn staff_menu(
         .prepare(format!(
             "SELECT {ITEM_COLUMNS}
              FROM menu_items
-             WHERE shop_id = ?1 AND status = 'active'
+             WHERE shop_id = ?1 AND status = 'active' AND deleted_at IS NULL
              ORDER BY sort_order, created_at, id"
         ))
         .bind(&[txt(&shop_id)])?
