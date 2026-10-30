@@ -34,12 +34,14 @@ export type LineResult =
 export function applicableGroups(menu: MenuData, item: MenuItem): GroupWithOptions[] {
   return menu.option_groups
     .filter((g) => g.menu_item_id === null || g.menu_item_id === item.id)
-    .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name, 'th'))
+    // Stable sort: ties keep the server order (sort_order, created_at, id) =
+    // the order the owner created them in, same as the owner editor.
+    .sort((a, b) => a.sort_order - b.sort_order)
     .map((group) => ({
       group,
       options: menu.options
         .filter((o) => o.option_group_id === group.id)
-        .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name, 'th')),
+        .sort((a, b) => a.sort_order - b.sort_order),
     }))
 }
 

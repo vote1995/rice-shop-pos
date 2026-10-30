@@ -515,6 +515,8 @@ export default function MenuEditor() {
   /** Lists of one item: attached to it, not shop-wide, not tier-pricing. */
   const listsOf = (itemId: string) =>
     data ? data.option_groups.filter((g) => g.menu_item_id === itemId && !g.tier_pricing) : []
+  /** Old shop-wide lists (menu_item_id null): they show on EVERY type at the counter. */
+  const sharedLists = data ? data.option_groups.filter((g) => g.menu_item_id === null && !g.tier_pricing) : []
   const optionsOf = (groupId: string) => (data ? data.options.filter((o) => o.option_group_id === groupId) : [])
 
   const editItem = editId !== null ? items.find((i) => i.id === editId) : undefined
@@ -755,6 +757,26 @@ export default function MenuEditor() {
       <button className="btn primary" disabled={busy || !shopId} onClick={() => void addType()}>
         + เพิ่มประเภท
       </button>
+
+      {sharedLists.length > 0 ? (
+        <section className="card">
+          <h2>ตัวเลือกแบบเก่า (ขึ้นกับทุกประเภท)</h2>
+          <p className="muted small">
+            หัวข้อเหล่านี้สร้างจากหน้าเมนูแบบเก่า และขึ้นในหน้าขายของทุกประเภท — ถ้าไม่ได้ตั้งใจ ให้ลบทิ้ง
+          </p>
+          {sharedLists.map((g) => (
+            <div className="row" key={g.id} style={{ flexWrap: 'nowrap' }}>
+              <span className="grow" style={{ minWidth: 0 }}>
+                <strong>{g.name}</strong>
+                <span className="muted small"> · {optionsOf(g.id).map((o) => o.name).join(', ') || 'ไม่มีตัวเลือก'}</span>
+              </span>
+              <button className="btn danger" style={{ flex: 'none', minHeight: 44 }} disabled={busy} onClick={() => void deleteList(g)}>
+                ลบ
+              </button>
+            </div>
+          ))}
+        </section>
+      ) : null}
 
       <section className="card">
         <h2>ค่าส่วนต่างเดลิเวอรี่</h2>
