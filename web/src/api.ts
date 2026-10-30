@@ -376,6 +376,46 @@ export interface MenuData {
   channel_markup: ChannelMarkup
 }
 
+// ---- owner stock (M1-6c): ingredients + per-plate recipe uses ----
+
+/** One ingredient row. POST/PUT/restock/count responses don't carry used_today. */
+export interface Ingredient {
+  id: string
+  shop_id: string
+  name: string
+  /** the unit is set once at creation; every number is counted in it */
+  unit: string
+  /** approximate remaining amount = last count − sold (recipe × plates) */
+  qty: number
+  alert_level: number
+  status: 'active' | 'inactive'
+  sort_order: number
+  created_at: string | null
+  updated_at: string | null
+}
+
+/** GET stock rows add the amount already sold today. */
+export interface StockIngredient extends Ingredient {
+  used_today: number
+}
+
+/** How much of one ingredient one target (menu item or option) uses per plate. */
+export interface RecipeUse {
+  id: string
+  ingredient_id: string
+  menu_item_id: string | null
+  option_id: string | null
+  /** server-parsed amount; amount_text is what the owner types ("1/10") */
+  amount: number
+  amount_text: string
+}
+
+/** GET /api/owner/shops/{shop_id}/stock */
+export interface StockData {
+  ingredients: StockIngredient[]
+  recipe: RecipeUse[]
+}
+
 // ---- owner day view: bills + payments (money = INTEGER satang; times = unix ms) ----
 
 export type OrderType = 'dine_in' | 'take_away' | 'delivery'
@@ -424,6 +464,8 @@ export interface Order {
   paid_at: number | null
   cancelled_at: number | null
   cancel_reason: string | null
+  /** NULL = the plates are not out yet (a paid bill can still be cooking). */
+  served_at: number | null
   items: OrderItem[]
 }
 

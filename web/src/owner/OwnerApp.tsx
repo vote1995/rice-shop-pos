@@ -2,10 +2,11 @@ import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ApiError, api, friendlyError } from '../api'
 import type { OwnerDevice, OwnerMe, OwnerStaff, Shop } from '../api'
-import MenuPanel from './MenuPanel'
+import MenuEditor from './MenuEditor'
+import StockPanel from './StockPanel'
 import { OrdersPanel } from './OrdersPanel'
 
-type Tab = 'orders' | 'devices' | 'shops' | 'staff' | 'menu'
+type Tab = 'orders' | 'devices' | 'shops' | 'staff' | 'menu' | 'stock'
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'orders', label: 'ออเดอร์' },
@@ -13,6 +14,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'shops', label: 'ร้าน' },
   { id: 'staff', label: 'พนักงาน' },
   { id: 'menu', label: 'เมนู' },
+  { id: 'stock', label: 'สต็อก' },
 ]
 
 function fmtTime(v: string | number | null | undefined): string {
@@ -86,7 +88,8 @@ export default function OwnerApp() {
         {tab === 'devices' ? <DevicesPanel /> : null}
         {tab === 'shops' ? <ShopsPanel /> : null}
         {tab === 'staff' ? <StaffPanel /> : null}
-        {tab === 'menu' ? <MenuPanel /> : null}
+        {tab === 'menu' ? <MenuEditor /> : null}
+        {tab === 'stock' ? <StockPanel /> : null}
       </main>
     </div>
   )

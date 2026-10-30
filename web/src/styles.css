@@ -107,7 +107,8 @@ button:disabled { opacity: 0.45; cursor: default; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* owner dashboard */
-.tabs { display: flex; gap: 8px; width: 100%; max-width: 900px; margin: 0 auto; padding: 12px 16px 0; }
+.tabs { display: flex; gap: 8px; width: 100%; max-width: 900px; margin: 0 auto; padding: 12px 16px 0; overflow-x: auto; }
+.tabs > .btn { flex: none; white-space: nowrap; }
 .owner-main {
   flex: 1; width: 100%; max-width: 900px; margin: 0 auto; padding: 16px;
   display: flex; flex-direction: column; gap: 14px;

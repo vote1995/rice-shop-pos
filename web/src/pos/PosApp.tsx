@@ -14,7 +14,7 @@ import {
   wipeAllStorage,
 } from '../api'
 import type { DeviceCreds, DeviceStatus, PinResponse, RegisterResponse, Staff } from '../api'
-import SalesApp from './SalesApp'
+import Counter from './Counter'
 
 // 3.54: auto-lock after 5 minutes without any pointer/key/touch activity.
 const AUTOLOCK_MS = 5 * 60 * 1000
@@ -450,7 +450,7 @@ export default function PosApp() {
           </span>
         </header>
         <main className="content">
-          <SalesApp onSessionExpired={sessionExpired} onRevoked={handleRevoked} />
+          <Counter onSessionExpired={sessionExpired} onRevoked={handleRevoked} />
           {msg ? (
             <p className="error" role="alert">
               {msg}
