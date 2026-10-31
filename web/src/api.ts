@@ -502,3 +502,83 @@ export interface DiscountBody {
   bill: BillDiscount | null
   lines: Array<{ item_id: string; amount: number }>
 }
+
+// ---- owner report (M2-R1): GET /api/owner/shops/{shop_id}/report ----
+// Money is INTEGER satang like everywhere else; `from`/`to` and the day keys
+// are Bangkok calendar days "YYYY-MM-DD"; every bucket counts PAID bills
+// only, except `summary`, which also reports cancelled/open ones.
+
+/** summary block: net = paid money minus refunds (satang). */
+export interface ReportSummary {
+  bills: number
+  net: number
+  refunds: number
+  cancelled: number
+  open: number
+  plates: number
+  avg_bill: number
+}
+
+/** One Bangkok day of the period, inclusive. */
+export interface ReportDayBucket {
+  day: string
+  bills: number
+  net: number
+}
+
+/** One Bangkok hour of the day (0..23, summed over the whole period). */
+export interface ReportHourBucket {
+  hour: number
+  bills: number
+  net: number
+}
+
+/** Plates sold of one menu type (qty = plates, amount = satang). */
+export interface ReportMenuRow {
+  menu_item_id: string
+  name: string
+  qty: number
+  amount: number
+}
+
+/** Times one choice was picked on lines of that type. */
+export interface ReportChoiceRow {
+  option_id: string
+  name: string
+  menu_item_id: string
+  qty: number
+}
+
+/** Ingredient the filtered bills consumed (already rounded to 4 decimals). */
+export interface ReportIngredientRow {
+  ingredient_id: string
+  name: string
+  unit: string
+  used: number
+}
+
+/** One bill of the capped list; `lines` is a ready-made "2× ข้าวมัน, …" text. */
+export interface ReportBillRow {
+  id: string
+  queue_number: number
+  created_at: number
+  channel: OrderChannel
+  status: OrderStatus
+  net: number
+  lines: string | null
+}
+
+/** GET /api/owner/shops/{shop_id}/report?from&to&tfrom&tto&menu_item_id&option_id&ingredient_id */
+export interface ReportData {
+  from: string
+  to: string
+  summary: ReportSummary
+  by_day: ReportDayBucket[]
+  by_hour: ReportHourBucket[]
+  menu: ReportMenuRow[]
+  choices: ReportChoiceRow[]
+  ingredients: ReportIngredientRow[]
+  bills: ReportBillRow[]
+  /** the list above never grows past this — show "แสดง N บิลล่าสุด" when equal. */
+  bills_capped_at: number
+}

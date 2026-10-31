@@ -18,14 +18,14 @@ import type { Channel, GroupWithOptions } from './pricing'
 // Constants / small helpers
 // ---------------------------------------------------------------------------
 
-const GREEN = '#17694A'
-const INK = '#1B1C1A'
-const MUTED = '#5E615B'
-const LINE = '#E2E0DA'
-const OFFWHITE = '#E9E7E1'
-const ORANGE = '#B4530E'
-const RED = '#A3341F'
-const BORDER = '#D4D2CB'
+// Palette: the CSS tokens of the `.pos` scope (UI-4), so light and dark both work.
+const GREEN = 'var(--accent)'
+const INK = 'var(--text)'
+const MUTED = 'var(--muted)'
+const LINE = 'var(--border)'
+const ORANGE = 'var(--warning)'
+const RED = 'var(--danger)'
+const BORDER = 'var(--border)'
 
 /** One tap picks the sales channel; หน้าร้าน = counter, the rest = delivery. */
 const CHANNELS: Array<{ id: Channel; label: string }> = [
@@ -195,7 +195,9 @@ interface ToastState {
 }
 
 // ---------------------------------------------------------------------------
-// Button styles (inline: this screen has its own tighter look, no CSS change)
+// Button styles. Only the generic bits live here (all colours are theme
+// tokens); the segmented channel row, the text type tabs and the choice cards
+// are the `.pos-*` classes in styles.css, because they need media queries.
 // ---------------------------------------------------------------------------
 
 const S = {
@@ -204,66 +206,28 @@ const S = {
     minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
-    margin: '0 -16px -16px',
   } as CSSProperties,
   body: {
     flex: '1 1 auto',
     display: 'flex',
     flexDirection: 'column',
-    gap: 10,
-    padding: '10px 16px 12px',
+    gap: 12,
+    padding: '12px 16px 16px',
   } as CSSProperties,
   panel: {
-    background: '#FFFFFF',
+    background: 'var(--surface)',
     borderTop: `1px solid ${LINE}`,
     padding: '8px 16px 10px',
     display: 'flex',
     flexDirection: 'column',
-    gap: 6,
+    gap: 8,
   } as CSSProperties,
-  channelBtn: (on: boolean) =>
-    ({
-      flex: 1,
-      height: 44,
-      minHeight: 44,
-      borderRadius: 10,
-      fontSize: 13,
-      fontWeight: 600,
-      padding: '0 4px',
-      border: `1.5px solid ${on ? GREEN : BORDER}`,
-      background: on ? GREEN : '#FFFFFF',
-      color: on ? '#FFFFFF' : INK,
-    }) as CSSProperties,
-  typeBtn: (on: boolean) =>
+  bigBtn: (bg: string, fg: string, border: string) =>
     ({
       height: 52,
       minHeight: 52,
-      borderRadius: 12,
-      fontSize: 15,
-      fontWeight: 700,
-      padding: '0 4px',
-      border: 0,
-      background: on ? INK : OFFWHITE,
-      color: on ? '#FFFFFF' : INK,
-      lineHeight: 1.2,
-    }) as CSSProperties,
-  chip: (on: boolean) =>
-    ({
-      minHeight: 44,
-      padding: '0 14px',
-      borderRadius: 22,
-      fontSize: 15,
-      fontWeight: 600,
-      border: `1.5px solid ${on ? GREEN : BORDER}`,
-      background: on ? GREEN : '#FFFFFF',
-      color: on ? '#FFFFFF' : INK,
-    }) as CSSProperties,
-  bigBtn: (bg: string, fg: string, border: string) =>
-    ({
-      height: 50,
-      minHeight: 50,
       borderRadius: 14,
-      border: `1.5px solid ${border}`,
+      border: `1px solid ${border}`,
       background: bg,
       color: fg,
       fontSize: 16,
@@ -275,7 +239,7 @@ const S = {
       height: 44,
       minHeight: 44,
       borderRadius: 12,
-      border: `1.5px solid ${border}`,
+      border: `1px solid ${border}`,
       background: bg,
       color: fg,
       fontSize: 14,
@@ -291,24 +255,6 @@ const S = {
     minHeight: 44,
     padding: '0 10px',
   } as CSSProperties,
-  nav: {
-    display: 'flex',
-    background: '#FFFFFF',
-    borderTop: `1px solid ${LINE}`,
-  } as CSSProperties,
-  navBtn: (on: boolean) =>
-    ({
-      flex: 1,
-      height: 56,
-      minHeight: 56,
-      border: 0,
-      borderTop: `3px solid ${on ? GREEN : 'transparent'}`,
-      background: 'none',
-      color: on ? GREEN : MUTED,
-      fontSize: 16,
-      fontWeight: 700,
-      borderRadius: 0,
-    }) as CSSProperties,
   pill: (bg: string, fg: string) =>
     ({ background: bg, color: fg }) as CSSProperties,
   field: {
@@ -321,7 +267,7 @@ const S = {
     padding: '0 12px',
     fontSize: 16,
     color: INK,
-    background: '#FFFFFF',
+    background: 'var(--surface)',
   } as CSSProperties,
 }
 
@@ -331,12 +277,14 @@ const S = {
 
 function LongPressButton({
   style,
+  className,
   onLong,
   onTap,
   children,
   ariaLabel,
 }: {
-  style: CSSProperties
+  style?: CSSProperties
+  className?: string
   onLong: () => void
   onTap: () => void
   children: ReactNode
@@ -373,6 +321,7 @@ function LongPressButton({
     <button
       type="button"
       aria-label={ariaLabel}
+      className={className}
       style={style}
       onPointerDown={down}
       onPointerUp={clear}
@@ -1037,119 +986,144 @@ export default function Counter({
 
   return (
     <div style={S.root}>
-      {tab === 'sell' ? renderSell() : renderQueue()}
+      <div className="pos-cols">
+        {/* left column: channel -> type -> builder (and the queue tab) */}
+        <div className="pos-left">
+          {tab === 'sell' ? renderSell() : renderQueue()}
 
-      {/* everything the staff must always see stays pinned to the bottom */}
-      <div style={{ position: 'sticky', bottom: 0, marginTop: 'auto', zIndex: 20 }}>
-        {msg ? (
-          <p
-            className="error"
-            role="alert"
-            style={{ margin: '0 16px', padding: '6px 0', fontSize: 14 }}
-          >
-            {msg}
-          </p>
-        ) : null}
+          {/* everything the staff must always see stays pinned to the bottom */}
+          <div className="pos-pinned">
+            {msg ? (
+              <p
+                className="error"
+                role="alert"
+                style={{ margin: '0 16px', padding: '6px 0', fontSize: 14 }}
+              >
+                {msg}
+              </p>
+            ) : null}
 
-        {tab === 'sell' && type && !quick ? (
-          <div style={S.panel}>
-            <div
-              style={{
-                fontSize: 14,
-                color: MUTED,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {pickedNames.length > 0 ? `${type.name} ${pickedNames.join(' ')}` : 'ติ๊กตัวเลือกที่ลูกค้าสั่ง'}
-            </div>
-            <button
-              type="button"
-              disabled={!addReady || busy}
-              style={{
-                ...S.bigBtn(GREEN, '#FFFFFF', GREEN),
-                background: addReady ? GREEN : '#9FA39A',
-                borderColor: addReady ? GREEN : '#9FA39A',
-              }}
-              onClick={addFromBuilder}
-            >
-              {addLabel}
-            </button>
-          </div>
-        ) : null}
+            {tab === 'sell' && type && !quick ? (
+              <div style={S.panel}>
+                <div
+                  style={{
+                    fontSize: 14,
+                    color: MUTED,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {pickedNames.length > 0 ? `${type.name} ${pickedNames.join(' ')}` : 'ติ๊กตัวเลือกที่ลูกค้าสั่ง'}
+                </div>
+                <button
+                  type="button"
+                  disabled={!addReady || busy}
+                  style={{
+                    ...S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN),
+                    background: addReady ? GREEN : 'var(--muted)',
+                    borderColor: addReady ? GREEN : 'var(--muted)',
+                  }}
+                  onClick={addFromBuilder}
+                >
+                  {addLabel}
+                </button>
+              </div>
+            ) : null}
 
-        {tab === 'sell' && cart.lines.length > 0 ? (
-          <div style={{ ...S.panel, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <button
-              type="button"
-              onClick={() => setCartOpen(true)}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                textAlign: 'left',
-                background: 'none',
-                border: 0,
-                padding: 0,
-                color: INK,
-                minHeight: 52,
-              }}
-            >
-              <span style={{ display: 'block', fontSize: 13, color: GREEN, fontWeight: 600 }}>
-                ตะกร้า {cartCount} รายการ · ดู/แก้
-              </span>
-              <span style={{ display: 'block', fontSize: 20, fontWeight: 700 }}>{baht(cartTotal)}</span>
-            </button>
-            {addTo ? (
+            {/* phone only: on >= 900px the docked "ออเดอร์" panel is the cart */}
+            {tab === 'sell' && cart.lines.length > 0 ? (
+              <div className="pos-bottombar">
+                <button
+                  type="button"
+                  onClick={() => setCartOpen(true)}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    textAlign: 'left',
+                    background: 'none',
+                    border: 0,
+                    padding: 0,
+                    color: INK,
+                    minHeight: 52,
+                  }}
+                >
+                  <span style={{ display: 'block', fontSize: 13, color: GREEN, fontWeight: 600 }}>
+                    ตะกร้า {cartCount} รายการ · ดู/แก้
+                  </span>
+                  <span style={{ display: 'block', fontSize: 20, fontWeight: 700 }}>{baht(cartTotal)}</span>
+                </button>
+                {addTo ? (
+                  <button
+                    type="button"
+                    style={S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN)}
+                    disabled={busy || cartHasError}
+                    onClick={() => void submitAddTo()}
+                  >
+                    เพิ่มเข้าคิว #{addTo.queue_number}
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      style={S.bigBtn('var(--surface)', GREEN, 'var(--border)')}
+                      disabled={busy || cartHasError}
+                      onClick={() => void submitCart(false)}
+                    >
+                      ส่งครัว
+                    </button>
+                    <button
+                      type="button"
+                      style={S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN)}
+                      disabled={busy || cartHasError}
+                      onClick={() => void submitCart(true)}
+                    >
+                      ส่ง + รับเงิน
+                    </button>
+                  </>
+                )}
+              </div>
+            ) : null}
+
+            <nav className="pos-nav" aria-label="หน้าหลัก">
               <button
                 type="button"
-                style={S.bigBtn(GREEN, '#FFFFFF', GREEN)}
-                disabled={busy || cartHasError}
-                onClick={() => void submitAddTo()}
+                className={tab === 'sell' ? 'on' : ''}
+                aria-current={tab === 'sell' ? 'page' : undefined}
+                onClick={() => setTab('sell')}
               >
-                เพิ่มเข้าคิว #{addTo.queue_number}
+                ขาย
               </button>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  style={S.bigBtn('#FFFFFF', GREEN, GREEN)}
-                  disabled={busy || cartHasError}
-                  onClick={() => void submitCart(false)}
-                >
-                  ส่งครัว
-                </button>
-                <button
-                  type="button"
-                  style={S.bigBtn(GREEN, '#FFFFFF', GREEN)}
-                  disabled={busy || cartHasError}
-                  onClick={() => void submitCart(true)}
-                >
-                  ส่ง + รับเงิน
-                </button>
-              </>
-            )}
+              <button
+                type="button"
+                className={tab === 'queue' ? 'on' : ''}
+                aria-current={tab === 'queue' ? 'page' : undefined}
+                onClick={() => setTab('queue')}
+              >
+                {queueOrders.length > 0 ? `คิว (${queueOrders.length})` : 'คิว'}
+              </button>
+            </nav>
           </div>
-        ) : null}
+        </div>
 
-        <nav style={S.nav} aria-label="หน้าหลัก">
-          <button
-            type="button"
-            style={S.navBtn(tab === 'sell')}
-            aria-current={tab === 'sell' ? 'page' : undefined}
-            onClick={() => setTab('sell')}
-          >
-            ขาย
-          </button>
-          <button
-            type="button"
-            style={S.navBtn(tab === 'queue')}
-            aria-current={tab === 'queue' ? 'page' : undefined}
-            onClick={() => setTab('queue')}
-          >
-            {queueOrders.length > 0 ? `คิว (${queueOrders.length})` : 'คิว'}
-          </button>
-        </nav>
+        {/* right column (>= 900px): the order being built, docked and always visible */}
+        <OrderPanel
+          lines={cartLines}
+          total={cartTotal}
+          count={cartCount}
+          hasError={cartHasError}
+          held={drafts.held}
+          addToNo={addTo?.queue_number ?? null}
+          busy={busy}
+          onQty={setLineQty}
+          onHold={holdCart}
+          onRestore={restoreHeld}
+          onDiscard={discardHeld}
+          onClear={clearCart}
+          onSend={() => void submitCart(false)}
+          onPay={() => void submitCart(true)}
+          onSendAddTo={() => void submitAddTo()}
+        />
       </div>
 
       {cartOpen ? (
@@ -1202,7 +1176,7 @@ export default function Counter({
             zIndex: 60,
             width: 'min(358px, calc(100vw - 32px))',
             background: INK,
-            color: '#FFFFFF',
+            color: 'var(--bg)',
             borderRadius: 14,
             padding: '10px 10px 10px 16px',
             display: 'flex',
@@ -1222,8 +1196,8 @@ export default function Counter({
                 padding: '0 12px',
                 borderRadius: 10,
                 border: 0,
-                background: 'rgba(255,255,255,0.14)',
-                color: '#9FE0C1',
+                background: 'rgba(128,128,128,0.3)',
+                color: 'var(--accent)',
                 fontSize: 15,
                 fontWeight: 700,
               }}
@@ -1270,8 +1244,8 @@ export default function Counter({
               gap: 8,
               padding: '0 4px',
               borderRadius: 12,
-              background: '#FDEBD8',
-              color: '#8A3D06',
+              background: 'var(--warning-soft)',
+              color: 'var(--warning)',
               fontSize: 14,
               fontWeight: 700,
             }}
@@ -1285,12 +1259,13 @@ export default function Counter({
             </button>
           </div>
         ) : (
-          <div style={{ display: 'flex', gap: 6 }} role="group" aria-label="ช่องทางขาย">
+          <div className="pos-seg" role="group" aria-label="ช่องทางขาย">
             {CHANNELS.map((c) => (
               <button
                 type="button"
                 key={c.id}
-                style={S.channelBtn(channel === c.id)}
+                className={channel === c.id ? 'on' : ''}
+                aria-pressed={channel === c.id}
                 onClick={() => pickChannel(c.id)}
               >
                 {c.label}
@@ -1299,18 +1274,16 @@ export default function Counter({
           </div>
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 6 }}>
+        <div className="pos-types" aria-label="ประเภทเมนู">
           {items.map((it) => (
             <LongPressButton
               key={it.id}
-              style={{ ...S.typeBtn(type?.id === it.id), opacity: it.sold_out ? 0.45 : 1 }}
+              className={`pos-type${type?.id === it.id ? ' on' : ''}${it.sold_out ? ' soldout' : ''}`}
               onLong={() => void toggleItemSoldOut(it)}
               onTap={() => tapType(it)}
             >
               {it.name}
-              {it.sold_out ? (
-                <span style={{ display: 'block', fontSize: 11, fontWeight: 600 }}>ของหมด</span>
-              ) : null}
+              {it.sold_out ? <span className="pos-type-sub">ของหมด</span> : null}
             </LongPressButton>
           ))}
         </div>
@@ -1344,11 +1317,11 @@ export default function Counter({
     const picked = picks.filter((id) => g.options.some((o) => o.id === id)).length
     const hint = groupHint(g, picked)
     return (
-      <div key={g.group.id} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <div style={{ fontSize: 14, fontWeight: 700 }}>
+      <div key={g.group.id} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div className="pos-group-title">
           {g.group.name} <span style={{ fontWeight: 500, color: hint.color }}>{hint.text}</span>
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        <div className="pos-choices">
           {g.options.map((o) => renderChoice(g, o))}
         </div>
         {g.options.length === 0 ? (
@@ -1362,18 +1335,26 @@ export default function Counter({
     if (!type || !menu) return null
     const on = picks.includes(o.id)
     const inCart = quick ? cartQtyOf(type.id, o.id) : 0
-    const label = quick
-      ? `${o.name} ${baht(optionPrice(type, o))}${inCart > 0 ? `  ×${inCart}` : ''}`
-      : `${g.group.max_select !== 1 ? (on ? '☑ ' : '☐ ') : ''}${o.name}${o.price_add > 0 ? ` +${fmtBaht(o.price_add)}` : ''}`
+    // a card: the name top-left, the price/"+฿x" bottom-right; a quick choice
+    // also shows how many of it already sit in the cart as a "×n" badge
+    const price = quick ? baht(optionPrice(type, o)) : o.price_add > 0 ? `+${fmtBaht(o.price_add)}` : ''
     return (
       <LongPressButton
         key={o.id}
-        style={{ ...S.chip(on || inCart > 0), opacity: o.sold_out ? 0.45 : 1 }}
+        className={`pos-choice${on || inCart > 0 ? ' on' : ''}${o.sold_out ? ' soldout' : ''}`}
         onLong={() => void toggleOptionSoldOut(o)}
         onTap={() => (quick ? tapQuickOption(type, o) : tapOption(g, o))}
       >
-        {label}
-        {o.sold_out ? ' (หมด)' : ''}
+        <span className="pos-choice-name">
+          {o.name}
+          {o.sold_out ? ' (หมด)' : ''}
+        </span>
+        {inCart > 0 ? (
+          <span className="pos-choice-badge" aria-hidden="true">
+            ×{inCart}
+          </span>
+        ) : null}
+        <span className="pos-choice-price">{price}</span>
       </LongPressButton>
     )
   }
@@ -1420,12 +1401,12 @@ export default function Counter({
 
   function statusPill(o: Order): { label: string; style: CSSProperties } {
     if (o.served_at === null && o.status !== 'paid') {
-      return { label: 'กำลังทำ', style: S.pill('#FDEBD8', '#8A3D06') }
+      return { label: 'กำลังทำ', style: S.pill('var(--warning-soft)', 'var(--warning)') }
     }
     if (o.served_at === null) {
-      return { label: 'จ่ายแล้ว · รอเสิร์ฟ', style: S.pill('#E3F1EA', '#0F4D35') }
+      return { label: 'จ่ายแล้ว · รอเสิร์ฟ', style: S.pill('var(--success-soft)', 'var(--success)') }
     }
-    return { label: 'เสิร์ฟแล้ว · รอจ่าย', style: S.pill('#E6ECF7', '#1D3F7A') }
+    return { label: 'เสิร์ฟแล้ว · รอจ่าย', style: S.pill('var(--accent-soft)', 'var(--accent-strong)') }
   }
 
   function renderOrder(o: Order) {
@@ -1435,7 +1416,7 @@ export default function Counter({
       <div
         key={o.id}
         style={{
-          background: '#FFFFFF',
+          background: 'var(--surface)',
           borderRadius: 16,
           border: `1px solid ${LINE}`,
           padding: 14,
@@ -1496,7 +1477,7 @@ export default function Counter({
           {!paid ? (
             <button
               type="button"
-              style={S.cardBtn('#FFFFFF', GREEN, GREEN)}
+              style={S.cardBtn('var(--surface)', GREEN, 'var(--border)')}
               disabled={busy}
               onClick={() => startAddTo(o)}
             >
@@ -1506,7 +1487,7 @@ export default function Counter({
           {o.served_at === null ? (
             <button
               type="button"
-              style={S.cardBtn('#FFFFFF', GREEN, GREEN)}
+              style={S.cardBtn('var(--surface)', GREEN, 'var(--border)')}
               disabled={busy}
               onClick={() => void serveOrder(o)}
             >
@@ -1516,7 +1497,7 @@ export default function Counter({
           {!paid ? (
             <button
               type="button"
-              style={S.cardBtn(GREEN, '#FFFFFF', GREEN)}
+              style={S.cardBtn(GREEN, 'var(--accent-contrast)', GREEN)}
               disabled={busy}
               onClick={() => {
                 setPayResult(null)
@@ -1530,6 +1511,163 @@ export default function Counter({
       </div>
     )
   }
+}
+
+// ---------------------------------------------------------------------------
+// Order panel (>= 900px): the cart is docked on the right instead of the
+// bottom bar + sheet. Same actions, same handlers — only the layout differs.
+// ---------------------------------------------------------------------------
+
+function OrderPanel({
+  lines,
+  total,
+  count,
+  hasError,
+  held,
+  addToNo,
+  busy,
+  onQty,
+  onHold,
+  onRestore,
+  onDiscard,
+  onClear,
+  onSend,
+  onPay,
+  onSendAddTo,
+}: {
+  lines: PricedCartLine[]
+  total: number
+  count: number
+  hasError: boolean
+  held: Cart[]
+  addToNo: number | null
+  busy: boolean
+  onQty: (id: string, delta: number) => void
+  onHold: () => void
+  onRestore: (i: number) => void
+  onDiscard: (i: number) => void
+  onClear: () => void
+  onSend: () => void
+  onPay: () => void
+  onSendAddTo: () => void
+}) {
+  const empty = lines.length === 0
+  return (
+    <aside className="pos-order" aria-label="ออเดอร์">
+      <div className="pos-order-head">
+        <h2 className="pos-order-title">ออเดอร์</h2>
+        {!empty ? <span className="muted small">{count} รายการ</span> : null}
+        <span style={{ flex: 1 }} />
+        {!empty && addToNo === null ? (
+          <button type="button" className="pos-mini" onClick={onHold}>
+            พักบิล
+          </button>
+        ) : null}
+        {!empty ? (
+          <button
+            type="button"
+            className="pos-mini"
+            style={{ color: RED, borderColor: 'transparent' }}
+            onClick={onClear}
+          >
+            ล้าง
+          </button>
+        ) : null}
+      </div>
+
+      <div className="pos-order-scroll">
+        {empty ? (
+          <p className="muted pos-order-empty">ยังไม่มีรายการ — เลือกเมนูทางซ้ายได้เลย</p>
+        ) : null}
+        {lines.map((c) => (
+          <div key={c.line.id} className="pos-line">
+            <div className="pos-line-top">
+              <span className="pos-line-name">{c.name}</span>
+              <span className="pos-line-total">{c.total !== null ? baht(c.total) : '—'}</span>
+            </div>
+            {c.optionsText ? <div className="pos-line-opts">{c.optionsText}</div> : null}
+            {c.error ? <div className="error small">{c.error}</div> : null}
+            <div className="pos-line-qty">
+              <button type="button" aria-label="ลดจำนวน" onClick={() => onQty(c.line.id, -1)}>
+                −
+              </button>
+              <span>{c.line.quantity}</span>
+              <button
+                type="button"
+                aria-label="เพิ่มจำนวน"
+                disabled={c.line.quantity >= 99}
+                onClick={() => onQty(c.line.id, 1)}
+              >
+                +
+              </button>
+            </div>
+          </div>
+        ))}
+
+        {held.length > 0 ? (
+          <div className="chips" aria-label="บิลที่พักไว้">
+            {held.map((h, i) => (
+              <span className="chip-group" key={h.id}>
+                <button type="button" className="chip" onClick={() => onRestore(i)}>
+                  พัก {i + 1} ({h.lines.reduce((s, l) => s + l.quantity, 0)})
+                </button>
+                <button
+                  type="button"
+                  className="chip chip-x"
+                  aria-label={`ทิ้งบิลพักที่ ${i + 1}`}
+                  onClick={() => onDiscard(i)}
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="pos-order-foot">
+        <div className="pos-order-total">
+          <span className="muted">รวม</span>
+          <span className="val">{baht(total)}</span>
+        </div>
+        {addToNo !== null ? (
+          <button
+            type="button"
+            style={S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN)}
+            disabled={busy || hasError || empty}
+            onClick={onSendAddTo}
+          >
+            เพิ่มเข้าคิว #{addToNo}
+          </button>
+        ) : (
+          <div className="pos-order-actions">
+            <button
+              type="button"
+              style={S.bigBtn('var(--surface)', GREEN, 'var(--border)')}
+              disabled={busy || hasError || empty}
+              onClick={onSend}
+            >
+              ส่งครัว
+            </button>
+            <button
+              type="button"
+              style={{
+                ...S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN),
+                height: 56,
+                minHeight: 56,
+                fontSize: 17,
+              }}
+              disabled={busy || hasError || empty}
+              onClick={onPay}
+            >
+              ส่ง + รับเงิน
+            </button>
+          </div>
+        )}
+        <p className="muted small">ราคาหน้าจอเป็นยอดคำนวณก่อนส่ง — ยอดจริงตามที่ระบบคิด</p>
+      </div>
+    </aside>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -1584,7 +1722,7 @@ function CartSheet({
               alignItems: 'center',
               gap: 8,
               padding: '6px 0',
-              borderBottom: '1px solid #EEEDE8',
+              borderBottom: '1px solid var(--border)',
             }}
           >
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -1597,7 +1735,7 @@ function CartSheet({
             <button
               type="button"
               aria-label="ลดจำนวน"
-              style={S.cardBtn('#FFFFFF', INK, BORDER)}
+              style={S.cardBtn('var(--surface-2)', INK, 'var(--border)')}
               onClick={() => onQty(c.line.id, -1)}
             >
               −
@@ -1608,7 +1746,7 @@ function CartSheet({
             <button
               type="button"
               aria-label="เพิ่มจำนวน"
-              style={S.cardBtn('#FFFFFF', INK, BORDER)}
+              style={S.cardBtn('var(--surface-2)', INK, 'var(--border)')}
               disabled={c.line.quantity >= 99}
               onClick={() => onQty(c.line.id, 1)}
             >
@@ -1647,7 +1785,7 @@ function CartSheet({
         ) : null}
         <button
           type="button"
-          style={S.bigBtn(GREEN, '#FFFFFF', GREEN)}
+          style={S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN)}
           disabled={lines.length === 0}
           onClick={onClose}
         >
@@ -1723,7 +1861,7 @@ function PaySheet({
             </span>
             <button
               type="button"
-              style={{ ...S.bigBtn(GREEN, '#FFFFFF', GREEN), marginTop: 10 }}
+              style={{ ...S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN), marginTop: 10 }}
               onClick={onClose}
             >
               ขายต่อ
@@ -1764,8 +1902,8 @@ function PaySheet({
                     fontWeight: 700,
                     padding: 0,
                     border: `1.5px solid ${GREEN}`,
-                    background: i === 0 ? GREEN : '#FFFFFF',
-                    color: i === 0 ? '#FFFFFF' : GREEN,
+                    background: i === 0 ? GREEN : 'var(--surface)',
+                    color: i === 0 ? 'var(--accent-contrast)' : GREEN,
                   }}
                   onClick={() => onCash(paymentId, v)}
                 >
@@ -1787,7 +1925,7 @@ function PaySheet({
               />
               <button
                 type="button"
-                style={S.bigBtn(GREEN, '#FFFFFF', GREEN)}
+                style={S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN)}
                 disabled={busy || otherSat === null || otherSat < total}
                 onClick={() => {
                   if (otherSat !== null) onCash(paymentId, otherSat)
@@ -1806,7 +1944,7 @@ function PaySheet({
         ) : (
           <button
             type="button"
-            style={{ ...S.bigBtn(GREEN, '#FFFFFF', GREEN), height: 60, minHeight: 60, fontSize: 17 }}
+            style={{ ...S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN), height: 60, minHeight: 60, fontSize: 17 }}
             disabled={busy}
             onClick={() => onApp(paymentId)}
           >
@@ -1857,8 +1995,8 @@ function CancelSheet({
               height: 50,
               minHeight: 50,
               borderRadius: 14,
-              border: '1.5px solid #E2C9C2',
-              background: '#FFFFFF',
+              border: '1.5px solid var(--danger-soft)',
+              background: 'var(--surface)',
               color: RED,
               fontSize: 16,
               fontWeight: 600,
@@ -1882,7 +2020,7 @@ function CancelSheet({
             />
             <button
               type="button"
-              style={S.bigBtn(RED, '#FFFFFF', RED)}
+              style={S.bigBtn(RED, 'var(--danger-contrast)', RED)}
               disabled={busy || other.trim() === ''}
               onClick={() => onConfirm(other.trim())}
             >
@@ -1897,8 +2035,8 @@ function CancelSheet({
               height: 50,
               minHeight: 50,
               borderRadius: 14,
-              border: '1.5px solid #E2C9C2',
-              background: '#FFFFFF',
+              border: '1.5px solid var(--danger-soft)',
+              background: 'var(--surface)',
               color: RED,
               fontSize: 16,
               fontWeight: 600,

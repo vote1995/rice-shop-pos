@@ -1,21 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ApiError, api, friendlyError } from '../api'
-import type { OwnerDevice, OwnerMe, OwnerStaff, Shop } from '../api'
+import type { OwnerDevice, OwnerMe, OwnerStaff } from '../api'
 import MenuEditor from './MenuEditor'
 import StockPanel from './StockPanel'
-import { OrdersPanel } from './OrdersPanel'
-
-type Tab = 'orders' | 'devices' | 'shops' | 'staff' | 'menu' | 'stock'
-
-const TABS: Array<{ id: Tab; label: string }> = [
-  { id: 'orders', label: 'ออเดอร์' },
-  { id: 'devices', label: 'เครื่อง' },
-  { id: 'shops', label: 'ร้าน' },
-  { id: 'staff', label: 'พนักงาน' },
-  { id: 'menu', label: 'เมนู' },
-  { id: 'stock', label: 'สต็อก' },
-]
+import OrdersPanel from './OrdersPanel'
+import ReportPanel from './ReportPanel'
+import { Shell, useOwnerTheme } from './Shell'
+import type { OwnerPage } from './Shell'
+import { OwnerShopProvider, useOwnerShop } from './shopContext'
 
 function fmtTime(v: string | number | null | undefined): string {
   if (v === null || v === undefined || v === '') return '-'
@@ -30,17 +23,25 @@ function isLocked(v: string | number | null | undefined): boolean {
 }
 
 export default function OwnerApp() {
-  const [tab, setTab] = useState<Tab>('devices')
+  const [page, setPage] = useState<OwnerPage>('report')
   const [me, setMe] = useState<OwnerMe | null>(null)
+  // the shop list + the ONE selection live in shopContext (loaded there);
+  // here only the "เครื่อง" nav badge is fetched
+  const [devices, setDevices] = useState<OwnerDevice[] | null>(null)
   const [denied, setDenied] = useState(false)
   const [msg, setMsg] = useState('')
+  const theme = useOwnerTheme()
 
   useEffect(() => {
     let on = true
     void (async () => {
       try {
         const m = await api<OwnerMe>('GET', '/api/owner/me')
-        if (on) setMe(m)
+        if (!on) return
+        setMe(m)
+        const ds = await api<OwnerDevice[]>('GET', '/api/owner/devices')
+        if (!on) return
+        setDevices(ds)
       } catch (e) {
         if (!on) return
         if (e instanceof ApiError && e.status === 403) setDenied(true)
@@ -54,63 +55,54 @@ export default function OwnerApp() {
 
   if (denied) {
     return (
-      <div className="screen">
-        <main className="content">
-          <div className="card center">
-            <h1>POS ร้านข้าว · เจ้าของ</h1>
-            <p className="error">บัญชีนี้ไม่มีสิทธิ์เจ้าของร้าน</p>
-          </div>
-        </main>
+      <div className="owner owner-denied" data-theme={theme.resolved}>
+        <div className="screen">
+          <main className="content">
+            <div className="card center">
+              <h1>POS ร้านข้าว · เจ้าของ</h1>
+              <p className="error">บัญชีนี้ไม่มีสิทธิ์เจ้าของร้าน</p>
+            </div>
+          </main>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="screen">
-      <header className="bar">
-        <span className="brand">POS ร้านข้าว · เจ้าของ</span>
-        <span className="muted small">{me ? me.email : '…'}</span>
-      </header>
-      <div className="tabs-wrap">
-        <nav className="tabs" role="tablist" aria-label="เมนูเจ้าของร้าน">
-        {TABS.map((t) => (
-          <button key={t.id} role="tab" aria-selected={tab === t.id} className="btn" onClick={() => setTab(t.id)}>
-            {t.label}
-          </button>
-        ))}
-        </nav>
-      </div>
-      <main className="owner-main">
+    <OwnerShopProvider>
+      <Shell
+        page={page}
+        onNav={setPage}
+        theme={theme}
+        email={me ? me.email : ''}
+        pendingDevices={devices ? devices.filter((d) => d.status === 'pending').length : 0}
+      >
         {msg ? (
           <p className="error" role="alert">
             {msg}
           </p>
         ) : null}
-        {tab === 'orders' ? <OrdersPanel /> : null}
-        {tab === 'devices' ? <DevicesPanel /> : null}
-        {tab === 'shops' ? <ShopsPanel /> : null}
-        {tab === 'staff' ? <StaffPanel /> : null}
-        {tab === 'menu' ? <MenuEditor /> : null}
-        {tab === 'stock' ? <StockPanel /> : null}
-      </main>
-    </div>
+        {page === 'report' ? <ReportPanel /> : null}
+        {page === 'orders' ? <OrdersPanel /> : null}
+        {page === 'menu' ? <MenuEditor /> : null}
+        {page === 'stock' ? <StockPanel /> : null}
+        {page === 'staff' ? <StaffPanel /> : null}
+        {page === 'devices' ? <DevicesPanel /> : null}
+        {page === 'shops' ? <ShopsPanel /> : null}
+      </Shell>
+    </OwnerShopProvider>
   )
 }
 
 function DevicesPanel() {
+  const { shops, shopId } = useOwnerShop()
   const [devices, setDevices] = useState<OwnerDevice[]>([])
-  const [shops, setShops] = useState<Shop[]>([])
   const [sel, setSel] = useState<Record<string, string>>({})
   const [msg, setMsg] = useState('')
 
   const load = useCallback(async () => {
     try {
-      const [ds, ss] = await Promise.all([
-        api<OwnerDevice[]>('GET', '/api/owner/devices'),
-        api<Shop[]>('GET', '/api/owner/shops'),
-      ])
-      setDevices(ds)
-      setShops(ss)
+      setDevices(await api<OwnerDevice[]>('GET', '/api/owner/devices'))
       setMsg('')
     } catch (e) {
       setMsg(friendlyError(e))
@@ -124,13 +116,13 @@ function DevicesPanel() {
   const shopOf = (d: OwnerDevice): string => shops.find((s) => s.id === d.shop_id)?.name ?? '-'
 
   async function approve(d: OwnerDevice) {
-    const shopId = sel[d.id] ?? shops[0]?.id ?? ''
-    if (!shopId) {
-      setMsg('ยังไม่มีร้าน — สร้างร้านในแท็บ "ร้าน" ก่อน')
+    const targetShop = sel[d.id] ?? shopId
+    if (!targetShop) {
+      setMsg('ยังไม่มีร้าน — สร้างร้านในหน้า "ร้าน" ก่อน')
       return
     }
     try {
-      await api('POST', `/api/owner/devices/${encodeURIComponent(d.id)}/approve`, { shop_id: shopId })
+      await api('POST', `/api/owner/devices/${encodeURIComponent(d.id)}/approve`, { shop_id: targetShop })
       await load()
     } catch (e) {
       setMsg(friendlyError(e))
@@ -164,6 +156,7 @@ function DevicesPanel() {
         {pending.map((d) => (
           <div className="item pending-item" key={d.id}>
             <div className="row">
+              <span className="status-dot warn" aria-hidden="true" />
               <strong className="grow">{d.name}</strong>
               <span className="badge pending">รออนุมัติ</span>
             </div>
@@ -172,7 +165,7 @@ function DevicesPanel() {
             <div className="row">
               <select
                 className="grow"
-                value={sel[d.id] ?? shops[0]?.id ?? ''}
+                value={sel[d.id] ?? shopId}
                 onChange={(e) => setSel({ ...sel, [d.id]: e.target.value })}
               >
                 {shops.length === 0 ? <option value="">— สร้างร้านก่อน —</option> : null}
@@ -190,13 +183,12 @@ function DevicesPanel() {
         ))}
       </div>
 
-      <h2>
-        เครื่องทั้งหมด ({rest.length})
-      </h2>
+      <h2>เครื่องทั้งหมด ({rest.length})</h2>
       <div className="list">
         {rest.map((d) => (
           <div className={`item ${d.status === 'approved' ? 'ok-item' : ''}`} key={d.id}>
             <div className="row">
+              <span className={`status-dot ${d.status === 'approved' ? 'ok' : 'bad'}`} aria-hidden="true" />
               <strong className="grow">{d.name}</strong>
               <span className={`badge ${d.status}`}>
                 {d.status === 'approved' ? 'ใช้งาน' : 'เพิกถอนแล้ว'}
@@ -218,22 +210,11 @@ function DevicesPanel() {
 }
 
 function ShopsPanel() {
-  const [shops, setShops] = useState<Shop[]>([])
+  // the list comes from the shared shop context; creating one refreshes it so
+  // the sidebar switcher picks the new shop up too
+  const { shops, error, reload } = useOwnerShop()
   const [name, setName] = useState('')
   const [msg, setMsg] = useState('')
-
-  const load = useCallback(async () => {
-    try {
-      setShops(await api<Shop[]>('GET', '/api/owner/shops'))
-      setMsg('')
-    } catch (e) {
-      setMsg(friendlyError(e))
-    }
-  }, [])
-
-  useEffect(() => {
-    void load()
-  }, [load])
 
   async function add(e: FormEvent) {
     e.preventDefault()
@@ -242,7 +223,7 @@ function ShopsPanel() {
     try {
       await api('POST', '/api/owner/shops', { id: crypto.randomUUID(), name: n })
       setName('')
-      await load()
+      await reload()
     } catch (err) {
       setMsg(friendlyError(err))
     }
@@ -250,6 +231,7 @@ function ShopsPanel() {
 
   return (
     <section>
+      {error ? <p className="error">{error}</p> : null}
       {msg ? <p className="error">{msg}</p> : null}
       <form className="card" onSubmit={add}>
         <h2>เพิ่มร้าน</h2>
@@ -274,29 +256,11 @@ function ShopsPanel() {
 }
 
 function StaffPanel() {
-  const [shops, setShops] = useState<Shop[]>([])
-  const [shopId, setShopId] = useState('')
+  const { shopId, error } = useOwnerShop()
   const [staff, setStaff] = useState<OwnerStaff[]>([])
   const [name, setName] = useState('')
   const [pin, setPin] = useState('')
   const [msg, setMsg] = useState('')
-
-  useEffect(() => {
-    let on = true
-    void (async () => {
-      try {
-        const ss = await api<Shop[]>('GET', '/api/owner/shops')
-        if (!on) return
-        setShops(ss)
-        if (ss.length > 0) setShopId((cur) => cur || ss[0].id)
-      } catch (e) {
-        if (on) setMsg(friendlyError(e))
-      }
-    })()
-    return () => {
-      on = false
-    }
-  }, [])
 
   const load = useCallback(async () => {
     if (!shopId) {
@@ -363,22 +327,13 @@ function StaffPanel() {
 
   return (
     <section>
+      {error ? <p className="error">{error}</p> : null}
       {msg ? <p className="error">{msg}</p> : null}
-      <label>
-        ร้าน
-        <select value={shopId} onChange={(e) => setShopId(e.target.value)}>
-          {shops.length === 0 ? <option value="">— ยังไม่มีร้าน —</option> : null}
-          {shops.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
-      </label>
       <div className="list">
         {staff.map((s) => (
           <div className="item" key={s.id}>
             <div className="row">
+              <span className={`status-dot ${s.status === 'active' ? 'ok' : 'bad'}`} aria-hidden="true" />
               <strong className="grow">{s.name}</strong>
               <span className={`badge ${s.status === 'active' ? 'approved' : 'revoked'}`}>
                 {s.status === 'active' ? 'ใช้งาน' : 'ปิดแล้ว'}

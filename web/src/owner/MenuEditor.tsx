@@ -10,8 +10,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, CSSProperties } from 'react'
 import { api, deleteMenuImage, errorCode, friendlyError, mediaUrl, uploadMenuImage } from '../api'
-import type { ChannelMarkup, Markup, MenuData, MenuItem, MenuOption, OptionGroup, Shop } from '../api'
+import type { ChannelMarkup, Markup, MenuData, MenuItem, MenuOption, OptionGroup } from '../api'
 import { prepareMenuImage } from '../imageResize'
+import { useOwnerShop } from './shopContext'
 
 type Channel = 'grab' | 'lineman' | 'foodpanda'
 
@@ -140,8 +141,7 @@ const MODE_BTN: CSSProperties = { flex: 'none', fontSize: '0.85rem', padding: '4
 const X_BTN: CSSProperties = { flex: 'none', minWidth: 44, padding: '4px 10px', minHeight: 44 }
 
 export default function MenuEditor() {
-  const [shops, setShops] = useState<Shop[]>([])
-  const [shopId, setShopId] = useState('')
+  const { shopId } = useOwnerShop()
   const [data, setData] = useState<MenuData | null>(null)
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
@@ -153,23 +153,6 @@ export default function MenuEditor() {
   const [imgBusy, setImgBusy] = useState(false)
   const [imgErr, setImgErr] = useState('')
   const saveTimer = useRef<number | null>(null)
-
-  useEffect(() => {
-    let on = true
-    void (async () => {
-      try {
-        const ss = await api<Shop[]>('GET', '/api/owner/shops')
-        if (!on) return
-        setShops(ss)
-        if (ss.length > 0) setShopId((cur) => cur || ss[0].id)
-      } catch (e) {
-        if (on) setMsg(friendlyError(e))
-      }
-    })()
-    return () => {
-      on = false
-    }
-  }, [])
 
   const load = useCallback(async () => {
     if (!shopId) {
@@ -601,7 +584,7 @@ export default function MenuEditor() {
               }}
             />
           ) : (
-            <div aria-hidden="true" style={{ width: 64, height: 64, borderRadius: 8, background: '#e5e5e5', flex: 'none' }} />
+            <div aria-hidden="true" style={{ width: 64, height: 64, borderRadius: 8, background: 'var(--surface-2)', flex: 'none' }} />
           )}
           <label className="grow">
             รูปเมนู (ถ้ามี)
@@ -680,7 +663,7 @@ export default function MenuEditor() {
               {opts.length === 0 ? <p className="muted small">ยังไม่มีตัวเลือกในหัวข้อนี้</p> : null}
               <button
                 className="btn ghost"
-                style={{ alignSelf: 'flex-start', minHeight: 44, border: '1.5px dashed #9fa39a', color: 'var(--green-dark)' }}
+                style={{ alignSelf: 'flex-start', minHeight: 44, border: '1.5px dashed var(--border)', color: 'var(--green-dark)' }}
                 onClick={() => void addOption(g)}
               >
                 + เพิ่มตัวเลือก
@@ -726,17 +709,6 @@ export default function MenuEditor() {
           {msg}
         </p>
       ) : null}
-      <label>
-        ร้าน
-        <select value={shopId} onChange={(e) => setShopId(e.target.value)} disabled={busy}>
-          {shops.length === 0 ? <option value="">— ยังไม่มีร้าน —</option> : null}
-          {shops.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
-      </label>
 
       <div className="row">
         <h2 className="grow">เมนู (ประเภท) {items.length}</h2>
@@ -860,13 +832,13 @@ function Switch({ checked, onChange, label }: { checked: boolean; onChange: () =
       onClick={onChange}
       style={{ minHeight: 44, minWidth: 60, padding: 8, background: 'transparent', border: 0, cursor: 'pointer' }}
     >
-      <span style={{ width: 44, height: 26, borderRadius: 999, padding: 3, display: 'inline-flex', alignItems: 'center', background: checked ? 'var(--green)' : '#cfd8cf' }}>
+      <span style={{ width: 44, height: 26, borderRadius: 999, padding: 3, display: 'inline-flex', alignItems: 'center', background: checked ? 'var(--green)' : 'var(--border)' }}>
         <span
           style={{
             width: 20,
             height: 20,
             borderRadius: '50%',
-            background: '#fff',
+            background: 'var(--knob)',
             transform: checked ? 'translateX(18px)' : 'none',
           }}
         />

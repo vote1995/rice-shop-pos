@@ -23,9 +23,9 @@ import type {
   OwnerDayOrder,
   OwnerDayOrdersData,
   Payment,
-  Shop,
 } from '../api'
 import { bahtToSatang, fmtBaht } from '../pos/pricing'
+import { useOwnerShop } from './shopContext'
 
 // ---------------------------------------------------------------------------
 // Labels
@@ -321,8 +321,7 @@ function previewDiscount(order: Order, d: DiscountDraft): DiscountPreview {
 // ---------------------------------------------------------------------------
 
 export function OrdersPanel() {
-  const [shops, setShops] = useState<Shop[]>([])
-  const [shopId, setShopId] = useState('')
+  const { shopId } = useOwnerShop()
   const [day, setDay] = useState<string>(() => bangkokToday())
   const [data, setData] = useState<OwnerDayOrdersData | null>(null)
   const [msg, setMsg] = useState('')
@@ -332,23 +331,6 @@ export function OrdersPanel() {
   const [discountFor, setDiscountFor] = useState<string | null>(null)
   const [cancelFor, setCancelFor] = useState<string | null>(null)
   const [refundFor, setRefundFor] = useState<string | null>(null)
-
-  useEffect(() => {
-    let on = true
-    void (async () => {
-      try {
-        const ss = await api<Shop[]>('GET', '/api/owner/shops')
-        if (!on) return
-        setShops(ss)
-        if (ss.length > 0) setShopId((cur) => cur || ss[0].id)
-      } catch (e) {
-        if (on) setMsg(friendlyError(e))
-      }
-    })()
-    return () => {
-      on = false
-    }
-  }, [])
 
   const load = useCallback(async () => {
     if (!shopId) {
@@ -458,17 +440,6 @@ export function OrdersPanel() {
       ) : null}
 
       <div className="row">
-        <label className="grow">
-          ร้าน
-          <select value={shopId} onChange={(e) => setShopId(e.target.value)} disabled={busy}>
-            {shops.length === 0 ? <option value="">— ยังไม่มีร้าน —</option> : null}
-            {shops.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
         <label className="grow">
           วันที่ (เวลากรุงเทพฯ)
           <input type="date" value={day} onChange={(e) => setDay(e.target.value)} disabled={busy} />

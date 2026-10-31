@@ -76,6 +76,7 @@ pub fn router(env: Env) -> Router {
         )
         .route("/owner/media-usage", get(routes::owner::media::usage))
         .route("/owner/shops/{shop_id}/stock", get(routes::owner::stock::shop_stock))
+        .route("/owner/shops/{shop_id}/report", get(routes::owner::report::report))
         .route("/owner/ingredients", post(routes::owner::stock::create_ingredient))
         .route("/owner/ingredients/{id}", put(routes::owner::stock::update_ingredient))
         .route("/owner/ingredients/{id}/restock", post(routes::owner::stock::restock))

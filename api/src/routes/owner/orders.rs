@@ -256,7 +256,7 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 /// `now` falls in when the parameter is absent (the queue numbers and the
 /// sale day share that clock, 3.11/3.33). Strict `YYYY-MM-DD` and a real
 /// calendar date; anything else is a 400 rather than a silently wrong day.
-fn day_param_start_ms(raw: Option<&str>, now: i64) -> Result<i64, ApiError> {
+pub(super) fn day_param_start_ms(raw: Option<&str>, now: i64) -> Result<i64, ApiError> {
     let Some(raw) = raw else {
         return Ok(bangkok_day_start_ms(now));
     };

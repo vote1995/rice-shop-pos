@@ -20,10 +20,10 @@ import type {
   MenuData,
   MenuItem,
   RecipeUse,
-  Shop,
   StockData,
   StockIngredient,
 } from '../api'
+import { useOwnerShop } from './shopContext'
 
 type SubTab = 'balance' | 'recipe'
 
@@ -104,13 +104,12 @@ const ROW_TAP: CSSProperties = {
   minWidth: 0,
 }
 const ROW_BTN: CSSProperties = { flex: 'none', fontSize: '0.9rem', padding: '6px 10px', minHeight: 44 }
-/** design colours of the "ใกล้หมด" state (orange text + warm border). */
-const LOW_TEXT = '#B4530E'
-const LOW_BORDER = '#E8B98F'
+/** design colours of the "ใกล้หมด" state (amber text + warm border). */
+const LOW_TEXT = 'var(--warning)'
+const LOW_BORDER = 'var(--warning)'
 
 export default function StockPanel() {
-  const [shops, setShops] = useState<Shop[]>([])
-  const [shopId, setShopId] = useState('')
+  const { shopId } = useOwnerShop()
   const [stock, setStock] = useState<StockData | null>(null)
   const [menu, setMenu] = useState<MenuData | null>(null)
   const [menuErr, setMenuErr] = useState('')
@@ -123,23 +122,6 @@ export default function StockPanel() {
   const [editFor, setEditFor] = useState<StockIngredient | null>(null)
   const [newOpen, setNewOpen] = useState(false)
   const [usesFor, setUsesFor] = useState<RecipeTarget | null>(null)
-
-  useEffect(() => {
-    let on = true
-    void (async () => {
-      try {
-        const ss = await api<Shop[]>('GET', '/api/owner/shops')
-        if (!on) return
-        setShops(ss)
-        if (ss.length > 0) setShopId((cur) => cur || ss[0].id)
-      } catch (e) {
-        if (on) setMsg(friendlyError(e))
-      }
-    })()
-    return () => {
-      on = false
-    }
-  }, [])
 
   const load = useCallback(
     async (reloadMenu = false) => {
@@ -252,17 +234,6 @@ export default function StockPanel() {
         </p>
       ) : null}
 
-      <label>
-        ร้าน
-        <select value={shopId} onChange={(e) => setShopId(e.target.value)} disabled={busy}>
-          {shops.length === 0 ? <option value="">— ยังไม่มีร้าน —</option> : null}
-          {shops.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
-      </label>
 
       <div className="seg" role="tablist" aria-label="สต็อก">
         <button

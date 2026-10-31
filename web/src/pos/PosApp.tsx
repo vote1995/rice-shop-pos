@@ -26,6 +26,123 @@ const APPROVED_RECHECK_MS = 60 * 1000
 
 type Screen = 'register' | 'pending' | 'revoked' | 'staff' | 'pin' | 'home'
 
+// UI-4: the staff app carries its own theme (the `.pos` token scope in
+// styles.css), remembered in localStorage 'pos.theme' and following the OS
+// by default. The header button cycles สว่าง -> มืด -> ตามระบบ.
+type ThemeChoice = 'light' | 'dark' | 'system'
+const THEME_KEY = 'pos.theme'
+const THEME_LABEL: Record<ThemeChoice, string> = { light: 'สว่าง', dark: 'มืด', system: 'ตามระบบ' }
+
+function readTheme(): ThemeChoice {
+  try {
+    const v = localStorage.getItem(THEME_KEY)
+    return v === 'light' || v === 'dark' || v === 'system' ? v : 'system'
+  } catch {
+    return 'system'
+  }
+}
+
+function usePosTheme(): { choice: ThemeChoice; resolved: 'light' | 'dark'; cycle: () => void } {
+  const [choice, setChoice] = useState<ThemeChoice>(readTheme)
+  const [systemDark, setSystemDark] = useState(
+    () =>
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-color-scheme: dark)').matches,
+  )
+
+  // "ตามระบบ" follows the OS live, including while the tab is open
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+
+  function cycle() {
+    setChoice((c) => {
+      const next: ThemeChoice = c === 'light' ? 'dark' : c === 'dark' ? 'system' : 'light'
+      try {
+        localStorage.setItem(THEME_KEY, next)
+      } catch {
+        /* private mode: keep the choice for this session only */
+      }
+      return next
+    })
+  }
+
+  return {
+    choice,
+    resolved: choice === 'system' ? (systemDark ? 'dark' : 'light') : choice,
+    cycle,
+  }
+}
+
+/** Sun / moon / monitor line icon of the theme choice (no icon library). */
+function ThemeIcon({ choice, resolved }: { choice: ThemeChoice; resolved: 'light' | 'dark' }) {
+  const glyph =
+    choice === 'system' ? (
+      <>
+        <rect x="3" y="4" width="18" height="13" rx="2" />
+        <path d="M8.5 21h7" />
+        <path d="M12 17v4" />
+      </>
+    ) : resolved === 'dark' ? (
+      <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" />
+    ) : (
+      <>
+        <circle cx="12" cy="12" r="4" />
+        <path d="M12 2.5v2" />
+        <path d="M12 19.5v2" />
+        <path d="M2.5 12h2" />
+        <path d="M19.5 12h2" />
+        <path d="M5.2 5.2l1.4 1.4" />
+        <path d="M17.4 17.4l1.4 1.4" />
+        <path d="M18.8 5.2l-1.4 1.4" />
+        <path d="M6.6 17.4l-1.4 1.4" />
+      </>
+    )
+  return (
+    <svg
+      width={20}
+      height={20}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {glyph}
+    </svg>
+  )
+}
+
+/** The rice-bowl glyph of the auth brand mark (decorative, no icon library). */
+function RiceBowl() {
+  return (
+    <svg
+      width={26}
+      height={26}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M3.5 12h17c0 4.7-3.8 8.5-8.5 8.5S3.5 16.7 3.5 12z" />
+      <path d="M9 9V6" />
+      <path d="M12.5 9V4.5" />
+      <path d="M16 9V6" />
+    </svg>
+  )
+}
+
 function shortId(id: string | null | undefined): string {
   return id ? id.slice(0, 8).toUpperCase() : '-'
 }
@@ -50,6 +167,7 @@ export default function PosApp() {
   const [lockedUntil, setLockedUntil] = useState<number | null>(null)
   const [tick, setTick] = useState(Date.now())
   const [busy, setBusy] = useState(false)
+  const theme = usePosTheme()
 
   /** 3.56: device revoked — wipe everything stored on this device. */
   const handleRevoked = useCallback(async () => {
@@ -272,16 +390,25 @@ export default function PosApp() {
 
   if (screen === 'revoked') {
     return (
-      <div className="screen">
-        <main className="content">
-          <div className="card center">
-            <h1>เครื่องนี้ถูกเพิกถอนแล้ว</h1>
-            <p className="muted">
-              ข้อมูลทั้งหมดในเครื่องนี้ถูกลบแล้ว หากต้องการใช้งานอีกครั้ง กรุณาลงทะเบียนใหม่
-            </p>
-            <button className="btn primary" onClick={() => setScreen('register')}>
-              ลงทะเบียนใหม่
-            </button>
+      <div className="screen pos pos-auth" data-theme={theme.resolved}>
+        <main className="pos-auth-main">
+          <div className="pos-auth-card">
+            <div className="pos-auth-brand">
+              <span className="pos-auth-mark" aria-hidden="true">
+                <RiceBowl />
+              </span>
+              <h1 className="pos-auth-title">POS ร้านข้าว</h1>
+              {shopName ? <p className="pos-auth-shop muted">ร้าน {shopName}</p> : null}
+            </div>
+            <div className="pos-auth-fields center">
+              <h2 className="pos-auth-heading">เครื่องนี้ถูกเพิกถอนแล้ว</h2>
+              <p className="muted">
+                ข้อมูลทั้งหมดในเครื่องนี้ถูกลบแล้ว หากต้องการใช้งานอีกครั้ง กรุณาลงทะเบียนใหม่
+              </p>
+              <button className="btn primary pos-auth-submit" onClick={() => setScreen('register')}>
+                ลงทะเบียนใหม่
+              </button>
+            </div>
           </div>
         </main>
       </div>
@@ -290,29 +417,38 @@ export default function PosApp() {
 
   if (screen === 'register') {
     return (
-      <div className="screen">
-        <main className="content">
-          <form className="card" onSubmit={registerDevice}>
-            <h1 className="brand">POS ร้านข้าว</h1>
-            <h2>ลงทะเบียนเครื่องนี้</h2>
-            <p className="muted">กรอกชื่อเครื่องเพื่อให้เจ้าของร้านรู้จักเครื่องนี้ตอนอนุมัติ</p>
-            <label>
-              ชื่อเครื่อง
-              <input
-                value={devName}
-                onChange={(e) => setDevName(e.target.value)}
-                placeholder="เช่น โต๊ะขายหน้าร้าน"
-                autoFocus
-              />
-            </label>
-            {msg ? (
-              <p className="error" role="alert">
-                {msg}
-              </p>
-            ) : null}
-            <button className="btn primary" type="submit" disabled={busy}>
-              {busy ? 'กำลังลงทะเบียน…' : 'ลงทะเบียนเครื่อง'}
-            </button>
+      <div className="screen pos pos-auth" data-theme={theme.resolved}>
+        <main className="pos-auth-main">
+          <form className="pos-auth-card" onSubmit={registerDevice}>
+            <div className="pos-auth-brand">
+              <span className="pos-auth-mark" aria-hidden="true">
+                <RiceBowl />
+              </span>
+              <h1 className="pos-auth-title">POS ร้านข้าว</h1>
+              {shopName ? <p className="pos-auth-shop muted">ร้าน {shopName}</p> : null}
+            </div>
+            <div className="pos-auth-fields">
+              <h2 className="pos-auth-heading">ลงทะเบียนเครื่องนี้</h2>
+              <p className="muted">กรอกชื่อเครื่องเพื่อให้เจ้าของร้านรู้จักเครื่องนี้ตอนอนุมัติ</p>
+              <label>
+                ชื่อเครื่อง
+                <input
+                  className="pos-auth-input"
+                  value={devName}
+                  onChange={(e) => setDevName(e.target.value)}
+                  placeholder="เช่น โต๊ะขายหน้าร้าน"
+                  autoFocus
+                />
+              </label>
+              {msg ? (
+                <p className="error" role="alert">
+                  {msg}
+                </p>
+              ) : null}
+              <button className="btn primary pos-auth-submit" type="submit" disabled={busy}>
+                {busy ? 'กำลังลงทะเบียน…' : 'ลงทะเบียนเครื่อง'}
+              </button>
+            </div>
           </form>
         </main>
       </div>
@@ -321,20 +457,29 @@ export default function PosApp() {
 
   if (screen === 'pending') {
     return (
-      <div className="screen">
-        <main className="content">
-          <div className="card center">
-            <div className="spinner" aria-hidden="true" />
-            <h2>รอเจ้าของอนุมัติเครื่องนี้</h2>
-            <p>
-              รหัสเครื่อง: <strong>{shortId(device?.device_id)}</strong>
-            </p>
-            <p className="muted small">ตรวจสอบสถานะอัตโนมัติทุก 5 วินาที</p>
-            {msg ? (
-              <p className="error" role="alert">
-                {msg}
+      <div className="screen pos pos-auth" data-theme={theme.resolved}>
+        <main className="pos-auth-main">
+          <div className="pos-auth-card">
+            <div className="pos-auth-brand">
+              <span className="pos-auth-mark" aria-hidden="true">
+                <RiceBowl />
+              </span>
+              <h1 className="pos-auth-title">POS ร้านข้าว</h1>
+              {shopName ? <p className="pos-auth-shop muted">ร้าน {shopName}</p> : null}
+            </div>
+            <div className="pos-auth-fields center">
+              <div className="spinner pos-auth-spinner" aria-hidden="true" />
+              <h2 className="pos-auth-heading">รอเจ้าของอนุมัติเครื่องนี้</h2>
+              <p className="pos-auth-code-row">
+                รหัสเครื่อง: <span className="pos-auth-code">{shortId(device?.device_id)}</span>
               </p>
-            ) : null}
+              <p className="muted small">ตรวจสอบสถานะอัตโนมัติทุก 5 วินาที</p>
+              {msg ? (
+                <p className="error" role="alert">
+                  {msg}
+                </p>
+              ) : null}
+            </div>
           </div>
         </main>
       </div>
@@ -343,29 +488,41 @@ export default function PosApp() {
 
   if (screen === 'staff') {
     return (
-      <div className="screen">
-        <header className="bar">
-          <span className="brand">POS ร้านข้าว</span>
-          {shopName ? <span className="muted">ร้าน {shopName}</span> : null}
-        </header>
-        <main className="content">
-          <h2>เลือกผู้ใช้งาน</h2>
-          {staff.length === 0 ? <p className="muted">ยังไม่มีพนักงาน — รอเจ้าของร้านเพิ่มพนักงาน</p> : null}
-          <div className="grid staff-grid">
-            {staff.map((s) => (
-              <button key={s.id} className="staff-btn" onClick={() => pickStaff(s)}>
-                {s.name}
+      <div className="screen pos pos-auth" data-theme={theme.resolved}>
+        <main className="pos-auth-main">
+          <div className="pos-auth-card wide">
+            <div className="pos-auth-brand">
+              <span className="pos-auth-mark" aria-hidden="true">
+                <RiceBowl />
+              </span>
+              <h1 className="pos-auth-title">POS ร้านข้าว</h1>
+              {shopName ? <p className="pos-auth-shop muted">ร้าน {shopName}</p> : null}
+            </div>
+            <div className="pos-auth-fields">
+              <h2 className="pos-auth-heading">เลือกผู้ใช้งาน</h2>
+              {staff.length === 0 ? (
+                <p className="muted">ยังไม่มีพนักงาน — รอเจ้าของร้านเพิ่มพนักงาน</p>
+              ) : null}
+              <div className="pos-people">
+                {staff.map((s) => (
+                  <button key={s.id} className="pos-person" onClick={() => pickStaff(s)}>
+                    <span className="pos-person-avatar" aria-hidden="true">
+                      {s.name.trim().slice(0, 1) || '?'}
+                    </span>
+                    <span className="pos-person-name">{s.name}</span>
+                  </button>
+                ))}
+              </div>
+              {msg ? (
+                <p className="error" role="alert">
+                  {msg}
+                </p>
+              ) : null}
+              <button className="pos-auth-link" onClick={() => void loadStaff()}>
+                รีเฟรช
               </button>
-            ))}
+            </div>
           </div>
-          {msg ? (
-            <p className="error" role="alert">
-              {msg}
-            </p>
-          ) : null}
-          <button className="btn ghost" onClick={() => void loadStaff()}>
-            รีเฟรช
-          </button>
         </main>
       </div>
     )
@@ -375,56 +532,68 @@ export default function PosApp() {
     const locked = lockedUntil !== null && tick < lockedUntil
     const remain = lockedUntil !== null ? Math.ceil((lockedUntil - tick) / 1000) : 0
     return (
-      <div className="screen">
-        <header className="bar">
-          <span className="brand">POS ร้านข้าว</span>
-          {shopName ? <span className="muted">ร้าน {shopName}</span> : null}
-        </header>
-        <main className="content">
-          <h2 className="center-text">{user.name}</h2>
-          <div className="dots" aria-label={`ใส่แล้ว ${pin.length} หลัก`}>
-            {[0, 1, 2, 3, 4, 5].map((i) => (
-              <span key={i} className={i < pin.length ? 'dot on' : 'dot'} />
-            ))}
-          </div>
-          <p className={locked || pinMsg ? 'error center-text' : 'muted center-text'}>
-            {locked ? `PIN ถูกล็อก ลองอีกครั้งใน ${fmtClock(remain)}` : pinMsg || 'กรุณาใส่ PIN 4-6 หลัก'}
-          </p>
-          <div className="pinpad">
-            {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((d) => (
+      <div className="screen pos pos-auth" data-theme={theme.resolved}>
+        <main className="pos-auth-main">
+          <div className="pos-auth-card pin">
+            <div className="pos-auth-user">
+              <span className="pos-auth-avatar" aria-hidden="true">
+                {user.name.trim().slice(0, 1) || '?'}
+              </span>
+              <h2>{user.name}</h2>
+              {shopName ? <p className="pos-auth-shop muted">ร้าน {shopName}</p> : null}
+            </div>
+            <div className="dots" aria-label={`ใส่แล้ว ${pin.length} หลัก`}>
+              {[0, 1, 2, 3, 4, 5].map((i) => (
+                <span key={i} className={i < pin.length ? 'dot on' : 'dot'} />
+              ))}
+            </div>
+            <p className={locked || pinMsg ? 'error center-text' : 'muted center-text'}>
+              {locked ? `PIN ถูกล็อก ลองอีกครั้งใน ${fmtClock(remain)}` : pinMsg || 'กรุณาใส่ PIN 4-6 หลัก'}
+            </p>
+            <div className="pinpad">
+              {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((d) => (
+                <button
+                  key={d}
+                  className="key"
+                  disabled={locked}
+                  onClick={() => setPin((p) => (p.length < 6 ? p + d : p))}
+                >
+                  {d}
+                </button>
+              ))}
               <button
-                key={d}
+                className="key"
+                disabled={locked || pin.length === 0}
+                onClick={() => setPin((p) => p.slice(0, -1))}
+                aria-label="ลบ"
+              >
+                ⌫
+              </button>
+              <button
                 className="key"
                 disabled={locked}
-                onClick={() => setPin((p) => (p.length < 6 ? p + d : p))}
+                onClick={() => setPin((p) => (p.length < 6 ? p + '0' : p))}
               >
-                {d}
+                0
               </button>
-            ))}
+              <button
+                className="key ok"
+                disabled={locked || pin.length < 4 || busy}
+                onClick={() => void submitPin()}
+              >
+                ตกลง
+              </button>
+            </div>
             <button
-              className="key"
-              disabled={locked || pin.length === 0}
-              onClick={() => setPin((p) => p.slice(0, -1))}
-              aria-label="ลบ"
+              className="pos-auth-link"
+              onClick={() => {
+                setUser(null)
+                setScreen('staff')
+              }}
             >
-              ⌫
-            </button>
-            <button className="key" disabled={locked} onClick={() => setPin((p) => (p.length < 6 ? p + '0' : p))}>
-              0
-            </button>
-            <button className="key ok" disabled={locked || pin.length < 4 || busy} onClick={() => void submitPin()}>
-              ตกลง
+              กลับ
             </button>
           </div>
-          <button
-            className="btn ghost"
-            onClick={() => {
-              setUser(null)
-              setScreen('staff')
-            }}
-          >
-            กลับ
-          </button>
         </main>
       </div>
     )
@@ -436,11 +605,20 @@ export default function PosApp() {
       void endSession(false)
     }
     return (
-      <div className="screen">
+      <div className="screen pos pos-home" data-theme={theme.resolved}>
         <header className="bar">
           <span className="brand">POS ร้านข้าว</span>
           {shopName ? <span className="muted">ร้าน {shopName} · {me.name}</span> : <span className="muted">{me.name}</span>}
           <span className="bar-actions">
+            <button
+              type="button"
+              className="bar-btn pos-theme-btn"
+              aria-label="สลับธีม"
+              title={THEME_LABEL[theme.choice]}
+              onClick={theme.cycle}
+            >
+              <ThemeIcon choice={theme.choice} resolved={theme.resolved} />
+            </button>
             <button className="bar-btn" onClick={() => void endSession(false)}>
               ล็อกจอ
             </button>
@@ -449,7 +627,7 @@ export default function PosApp() {
             </button>
           </span>
         </header>
-        <main className="content">
+        <main className="content pos-content">
           <Counter onSessionExpired={sessionExpired} onRevoked={handleRevoked} />
           {msg ? (
             <p className="error" role="alert">

@@ -106,24 +106,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* owner dashboard */
-.tabs-wrap { position: relative; flex: none; width: 100%; max-width: 900px; margin: 0 auto; }
-/* fade on the right = "more tabs to swipe to". An overlay, NOT a mask on the
-   scroller: iOS Safari stops touch-scrolling an element that has a mask. */
-.tabs-wrap::after {
-  content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 32px;
-  background: linear-gradient(to right, transparent, var(--bg)); pointer-events: none;
-}
-.tabs {
-  display: flex; gap: 8px; padding: 12px 32px 8px 16px;
-  overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none;
-}
-.tabs::-webkit-scrollbar { display: none; }
-.tabs > .btn { flex: none; white-space: nowrap; }
-.owner-main {
-  flex: 1; width: 100%; max-width: 900px; margin: 0 auto; padding: 16px;
-  display: flex; flex-direction: column; gap: 14px;
-}
+/* owner list rows (the dashboard chrome itself lives in the .owner scope below) */
 .list { display: grid; gap: 12px; }
 .item {
   background: var(--card); border: 1px solid var(--border); border-radius: 14px;
@@ -244,7 +227,6 @@ button:disabled { opacity: 0.45; cursor: default; }
 
 @media (min-width: 720px) {
   .list { grid-template-columns: 1fr 1fr; }
-  .owner-main, .tabs { padding-left: 24px; padding-right: 24px; }
   .item-grid { grid-template-columns: repeat(3, 1fr); }
 }
 
@@ -267,4 +249,994 @@ button:disabled { opacity: 0.45; cursor: default; }
   border: 1px solid var(--border); border-radius: 12px; padding: 10px;
   display: flex; flex-direction: column; gap: 6px; background: #fbfdfb;
 }
+
+/* ==========================================================================
+   OWNER app shell (UI-1) — modern SaaS dashboard look.
+   Everything in this section is scoped to `.owner` (the owner root element),
+   so the staff POS keeps the green tokens and styles defined above.
+   ========================================================================== */
+
+.owner {
+  /* ---- light theme ---- */
+  --bg: #f6f6f7;
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --border: #ececee;
+  --text: #18181b;
+  --muted: #71717a;
+  --accent: #ea580c;
+  --accent-strong: #c2410c;
+  --accent-soft: #fff1e8;
+  --success: #16a34a;
+  --warning: #b45309;
+  --danger: #dc2626;
+  --success-soft: #e8f6ec;
+  --warning-soft: #fdf2e2;
+  --danger-soft: #fdeaea;
+  --knob: #ffffff;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.04);
+  /* ---- legacy token names the owner panels already use → re-theme for free ---- */
+  --green: var(--accent);
+  --green-dark: var(--accent-strong);
+  --card: var(--surface);
+
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+}
+.owner[data-theme="dark"] {
+  --bg: #0f1012;
+  --surface: #18191c;
+  --surface-2: #1f2024;
+  --border: #2a2b30;
+  --text: #f1f1f3;
+  --muted: #a1a1aa;
+  --accent: #fb923c;
+  --accent-strong: #fdba74;
+  --accent-soft: #3a2214;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --success-soft: rgba(74, 222, 128, 0.16);
+  --warning-soft: rgba(251, 191, 36, 0.16);
+  --danger-soft: rgba(248, 113, 113, 0.16);
+  --knob: #f4f4f5;
+  --shadow: none;
+  color-scheme: dark;
+}
+/* the page behind the app, so overscroll matches the theme */
+body:has(.owner) { background: #f6f6f7; }
+body:has(.owner[data-theme="dark"]) { background: #0f1012; }
+
+/* ---- shared bits, restyled for the dashboard ---- */
+.owner h1 { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.01em; }
+.owner h2 { font-size: 1.05rem; font-weight: 700; letter-spacing: -0.01em; }
+.owner h3 { font-size: 0.98rem; font-weight: 700; margin: 0; }
+.owner .muted { color: var(--muted); }
+.owner .error { color: var(--danger); font-weight: 600; }
+
+.owner .card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+.owner .item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.owner .item.pending-item { border-left: 4px solid var(--warning); }
+.owner .item.ok-item { border-left: 4px solid var(--success); }
+.owner .group-block,
+.owner .sum-box,
+.owner .pay-line { background: var(--surface-2); border-color: var(--border); }
+.owner .sum-box { border-radius: 12px; }
+.owner .preview-line { color: var(--accent-strong); }
+.owner .total-big { font-size: 1.25rem; font-weight: 800; }
+
+/* controls: neutral surface + border, accent for the primary action */
+.owner button {
+  min-height: 44px;
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+}
+.owner .btn:hover:not(:disabled) { border-color: var(--muted); }
+.owner .chip:hover:not(:disabled):not(.on) { border-color: var(--muted); }
+.owner .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.owner .btn.primary:hover:not(:disabled) { background: var(--accent-strong); border-color: var(--accent-strong); }
+.owner .btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.owner .btn.danger:hover:not(:disabled) { filter: brightness(0.94); }
+.owner .btn.ghost { background: transparent; }
+.owner[data-theme="dark"] .btn.primary { color: #241403; }
+
+.owner input,
+.owner select,
+.owner textarea {
+  min-height: 44px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+}
+.owner input::placeholder { color: var(--muted); opacity: 0.8; }
+.owner input:focus,
+.owner select:focus,
+.owner textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.owner button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.owner .check input { accent-color: var(--accent); }
+
+/* tables: small uppercase grey headers, rows split by light lines */
+.owner table { border-collapse: collapse; }
+.owner th { text-transform: uppercase; letter-spacing: 0.06em; }
+.owner td { border-bottom: 1px solid var(--border); }
+
+/* chips / segmented control / badges */
+.owner .chip { background: var(--surface); border: 1px solid var(--border); color: var(--text); font-weight: 600; }
+.owner .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.owner[data-theme="dark"] .chip.on { color: #241403; }
+.owner .seg { gap: 4px; padding: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; }
+.owner .seg button { flex: 1; min-height: 44px; background: transparent; border-color: transparent; color: var(--muted); }
+.owner .seg button.on {
+  background: var(--surface); border-color: var(--border); color: var(--accent-strong);
+  box-shadow: var(--shadow); font-weight: 700;
+}
+.owner .badge {
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--muted);
+  font-size: 0.78rem; font-weight: 700; padding: 2px 9px;
+}
+.owner .badge.pending { background: var(--warning-soft); border-color: transparent; color: var(--warning); }
+.owner .badge.approved { background: var(--success-soft); border-color: transparent; color: var(--success); }
+.owner .badge.revoked { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
+
+/* status dots (green / amber / red) */
+.owner .status-dot {
+  flex: none; width: 9px; height: 9px; border-radius: 50%; display: inline-block;
+  background: var(--muted);
+}
+.owner .status-dot.ok { background: var(--success); }
+.owner .status-dot.warn { background: var(--warning); }
+.owner .status-dot.bad { background: var(--danger); }
+
+.owner .spinner { border-color: var(--border); border-top-color: var(--accent); }
+.owner .sheet { background: var(--surface); border: 1px solid var(--border); border-bottom: none; box-shadow: var(--shadow); }
+
+/* ---- shell: mobile first (top bar + off-canvas drawer) ---- */
+.owner.owner-shell { min-height: 100%; display: flex; flex-direction: column; }
+.owner .shell-top {
+  position: sticky; top: 0; z-index: 50; flex: none;
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 10px;
+  padding-top: calc(8px + env(safe-area-inset-top));
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.owner .shell-top-title {
+  flex: 1; min-width: 0; font-size: 1.05rem; font-weight: 700;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.owner .icon-btn {
+  flex: none; width: 44px; min-width: 44px; min-height: 44px; padding: 0;
+  display: grid; place-items: center;
+  background: transparent; border-color: transparent; border-radius: 10px; color: var(--muted);
+}
+.owner .icon-btn:hover:not(:disabled) { background: var(--surface); border-color: var(--border); color: var(--text); }
+
+.owner .drawer-backdrop {
+  position: fixed; inset: 0; z-index: 60; display: none;
+  width: 100%; min-height: 0; padding: 0; border: 0; border-radius: 0;
+  background: rgba(9, 9, 11, 0.5); cursor: default;
+}
+
+.owner .sidebar {
+  display: flex; flex-direction: column;
+  background: var(--surface-2);
+  border-right: 1px solid var(--border);
+}
+.owner .side-brand {
+  flex: none; display: flex; align-items: center; gap: 6px;
+  min-height: 64px; padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.owner .brand-row { flex: 1 1 auto; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.owner .brand-logo {
+  flex: none; width: 36px; height: 36px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: linear-gradient(140deg, var(--accent), var(--accent-strong));
+  color: #fff; font-weight: 800; font-size: 1.05rem;
+}
+.owner .brand-name {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px;
+  font-weight: 800; font-size: 1rem; line-height: 1.2; letter-spacing: -0.01em;
+}
+.owner .brand-name small { color: var(--muted); font-size: 0.74rem; font-weight: 600; }
+.owner .close-btn { display: grid; }
+.owner .collapse-btn { display: none; }
+
+.owner .side-scroll {
+  flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 12px 12px 14px;
+}
+.owner .shop-card {
+  display: flex; align-items: center; gap: 10px; min-height: 48px;
+  padding: 8px 12px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface); box-shadow: var(--shadow);
+}
+.owner .shop-ic { flex: none; display: grid; place-items: center; color: var(--accent); }
+.owner .shop-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0; }
+.owner .shop-name {
+  font-weight: 700; font-size: 0.95rem; line-height: 1.25;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.owner .shop-sub { font-size: 0.75rem; line-height: 1.3; }
+
+/* shop switcher (UI-2): the card is the picker, the list pops below it */
+.owner .shop-switch { position: relative; display: flex; }
+.owner .shop-switch > .shop-card { width: 100%; text-align: left; cursor: pointer; }
+.owner .shop-switch .shop-caret {
+  flex: none; display: grid; place-items: center; color: var(--muted);
+  transform: rotate(-90deg);
+}
+.owner .shop-switch .shop-caret.on { transform: rotate(90deg); color: var(--accent); }
+.owner .shop-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 6;
+  display: flex; flex-direction: column; gap: 2px; padding: 4px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface-2); box-shadow: var(--shadow);
+}
+.owner .shop-opt {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; min-height: 44px; padding: 8px 10px;
+  border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: var(--text); font-weight: 600; text-align: left;
+}
+.owner .shop-opt:hover:not(:disabled) { background: var(--surface); border-color: var(--border); }
+.owner .shop-opt.on { background: var(--surface); border-color: var(--border); color: var(--accent-strong); font-weight: 700; }
+.owner .shop-opt .nav-ic { color: var(--muted); }
+.owner .shop-opt.on .nav-ic { color: var(--accent); }
+/* the popover may leave the scroll column (icon rail) while it is open */
+.owner .side-scroll:has(.shop-menu) { overflow: visible; }
+
+.owner .side-nav { display: flex; flex-direction: column; gap: 14px; }
+.owner .nav-group { display: flex; flex-direction: column; gap: 2px; }
+.owner .nav-group-label {
+  margin: 0; padding: 2px 10px 5px;
+  font-size: 0.68rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--muted);
+}
+.owner .nav-item {
+  position: relative;
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; min-height: 44px; padding: 8px 10px;
+  border: 1px solid transparent; border-radius: 12px;
+  background: transparent; color: var(--text); font-weight: 600; text-align: left;
+}
+.owner .nav-item:hover:not(:disabled) { background: var(--surface); border-color: var(--border); }
+.owner .nav-item.on {
+  background: var(--surface); border-color: var(--border); box-shadow: var(--shadow);
+  color: var(--accent-strong); font-weight: 700;
+}
+.owner .nav-ic { flex: none; display: grid; place-items: center; color: var(--muted); }
+.owner .nav-item.on .nav-ic { color: var(--accent); }
+.owner .nav-label {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.owner .nav-badge {
+  flex: none; min-width: 20px; height: 20px; padding: 0 6px;
+  display: grid; place-items: center; border-radius: 999px;
+  background: var(--danger); color: #fff; font-size: 0.72rem; font-weight: 700;
+}
+
+.owner .side-foot {
+  flex: none; display: flex; flex-direction: column; gap: 8px;
+  padding: 12px; border-top: 1px solid var(--border);
+}
+.owner .theme-seg {
+  display: flex; gap: 4px; padding: 4px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+}
+.owner .theme-seg > button {
+  flex: 1; min-height: 44px; padding: 4px 6px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid transparent; border-radius: 8px;
+  background: transparent; color: var(--muted); font-size: 0.8rem; font-weight: 600;
+}
+.owner .theme-seg > button.on { background: var(--accent-soft); color: var(--accent-strong); font-weight: 700; }
+.owner .side-email { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.owner .shell-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.owner .shell-content {
+  width: 100%; max-width: 1200px; margin: 0 auto;
+  padding: 14px 14px 32px;
+  display: flex; flex-direction: column; gap: 14px; min-width: 0;
+}
+/* panels render a bare <section> root: give its children the same rhythm as the shell */
+.owner .shell-content > section { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.owner .page-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding-top: 2px; }
+.owner .page-head h1 { margin: 0; }
+.owner .page-sub { font-size: 0.85rem; }
+
+/* mobile: the sidebar is an off-canvas drawer */
+@media (max-width: 899px) {
+  .owner-shell[data-drawer="open"] .drawer-backdrop { display: block; }
+  .owner .page-head h1 { display: none; } /* the top app bar already shows it */
+  .owner .page-head { padding-bottom: 2px; border-bottom: 1px solid var(--border); }
+  .owner .sidebar {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 70;
+    width: min(300px, 86vw);
+    transform: translateX(-102%);
+    visibility: hidden;
+    transition: transform 0.22s ease, visibility 0.22s ease;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.22);
+  }
+  .owner-shell[data-drawer="open"] .sidebar { transform: none; visibility: visible; }
+  .owner .collapse-btn { display: none; }
+}
+
+/* desktop: fixed left column + centred content */
+@media (min-width: 900px) {
+  .owner.owner-shell { flex-direction: row; }
+  .owner .shell-top { display: none; }
+  .owner .drawer-backdrop { display: none; }
+  .owner .close-btn { display: none; }
+  .owner .collapse-btn { display: grid; }
+  .owner .sidebar { position: sticky; top: 0; height: 100vh; width: 264px; flex: none; }
+  .owner .shell-content { padding: 24px; gap: 16px; }
+  .owner .page-head { padding-top: 4px; }
+
+  /* the collapsed 72px icon rail */
+  .owner-shell[data-rail="on"] .sidebar { width: 72px; }
+  .owner-shell[data-rail="on"] .side-brand { flex-direction: column; gap: 6px; padding: 14px 8px; }
+  .owner-shell[data-rail="on"] .brand-name,
+  .owner-shell[data-rail="on"] .shop-text,
+  .owner-shell[data-rail="on"] .nav-group-label,
+  .owner-shell[data-rail="on"] .nav-label,
+  .owner-shell[data-rail="on"] .theme-label,
+  .owner-shell[data-rail="on"] .side-email { display: none; }
+  .owner-shell[data-rail="on"] .brand-row { flex: none; }
+  .owner-shell[data-rail="on"] .side-scroll { padding: 12px 8px; align-items: stretch; }
+  .owner-shell[data-rail="on"] .shop-card { justify-content: center; padding: 10px 0; }
+  /* the rail keeps its 44px icon; the list opens to the right of it */
+  .owner-shell[data-rail="on"] .shop-menu { left: calc(100% + 6px); right: auto; top: 0; width: 216px; }
+  .owner-shell[data-rail="on"] .shop-switch .shop-caret { display: none; }
+  .owner-shell[data-rail="on"] .nav-item { justify-content: center; padding: 8px 0; }
+  .owner-shell[data-rail="on"] .nav-badge { position: absolute; top: 3px; right: 8px; }
+  .owner-shell[data-rail="on"] .theme-seg { flex-direction: column; }
+  .owner-shell[data-rail="on"] .collapse-btn svg { transform: rotate(180deg); }
+}
+
+@media (min-width: 720px) and (max-width: 899px) {
+  .owner .shell-content { padding-left: 24px; padding-right: 24px; }
+}
+
+/* ==========================================================================
+   OWNER report dashboard (UI-3) — the .dash-* scope of the "สรุปยอด" panel.
+   Every rule below only uses theme tokens, so light and dark both work, and
+   everything is scoped to .owner so the staff POS is untouched.
+   Cards: 16px radius, 20px padding, 16px between them.
+   ========================================================================== */
+
+.owner .dash { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.owner .dash-card { border-radius: 16px; padding: 20px; }
+
+/* card header: title + muted subtitle on one line */
+.owner .dash-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.owner .dash-head h2 { font-size: 1.05rem; font-weight: 700; }
+.owner .dash-head p { margin: 0; }
+
+/* round icon chip (surface-2 bg, tone colours the glyph) */
+.owner .dash-ic {
+  flex: none; width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--surface-2); color: var(--muted);
+}
+.owner .dash-ic.accent { background: var(--accent-soft); color: var(--accent); }
+.owner .dash-ic.ok { color: var(--success); }
+.owner .dash-ic.warn { color: var(--warning); }
+.owner .dash-ic.bad { color: var(--danger); }
+
+/* ---- filter bar ---- */
+.owner .dash-filters { gap: 10px; }
+.owner .dash-tools { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
+.owner .dash-spacer { flex: 1 1 8px; }
+.owner .dash-busy { white-space: nowrap; }
+
+/* segmented control: pill group, the active segment filled with --accent */
+.owner .dash-seg {
+  display: flex; flex-wrap: wrap; gap: 4px; padding: 4px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px;
+}
+.owner .dash-seg button {
+  min-height: 34px; min-width: 0; padding: 4px 13px;
+  border: 1px solid transparent; border-radius: 999px;
+  background: transparent; color: var(--muted);
+  font-size: 0.85rem; font-weight: 600; white-space: nowrap;
+}
+.owner .dash-seg button:hover:not(:disabled):not(.on) { color: var(--text); }
+.owner .dash-seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.owner[data-theme="dark"] .dash-seg button.on { color: #241403; }
+
+/* the compact selects of the second filter row */
+.owner .dash-field {
+  flex: 1 1 150px; max-width: 220px; min-width: 0;
+  display: flex; flex-direction: column; gap: 3px; font-weight: 600;
+}
+.owner .dash-field > span {
+  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--muted);
+}
+.owner .dash-field input,
+.owner .dash-field select { min-height: 36px; padding: 5px 10px; font-size: 0.88rem; border-radius: 9px; }
+
+/* small ghost buttons ("ล้างตัวกรอง", "รีเฟรช") */
+.owner .dash-mini {
+  min-height: 36px; min-width: 0; padding: 4px 12px;
+  display: inline-flex; align-items: center; gap: 6px;
+  border-radius: 999px; font-size: 0.85rem;
+}
+.owner .dash-inline { padding-top: 2px; }
+.owner .dash-inline .dash-field { flex: 0 1 180px; max-width: 200px; }
+.owner .dash-active { margin: 0; }
+
+/* ---- KPI cards ---- */
+.owner .dash-kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.owner .dash-kpi { gap: 10px; }
+.owner .dash-kpi-top { display: flex; align-items: center; gap: 8px; }
+.owner .dash-kpi-label { font-size: 0.82rem; font-weight: 600; letter-spacing: 0.01em; }
+.owner .dash-kpi-val {
+  font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.owner .dash-kpi-note {
+  margin: 0; padding-top: 8px; border-top: 1px solid var(--border);
+  font-size: 0.8rem; line-height: 1.4;
+}
+
+/* ---- charts + "ต้องดู": two columns on wide screens, stacked on phones ---- */
+.owner .dash-cols { display: flex; flex-direction: column; gap: 16px; }
+.owner .dash-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+/* horizontal bar rows: --accent fill on an --accent-soft track */
+.owner .dash-hbars { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.owner .dash-hbar { display: flex; align-items: center; gap: 8px; }
+.owner .dash-hbar-label {
+  flex: 0 0 48px; font-size: 0.8rem; font-weight: 600; color: var(--muted);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.owner .dash-hbar-track {
+  flex: 1 1 40px; min-width: 0; height: 10px; border-radius: 999px;
+  background: var(--accent-soft); overflow: hidden;
+}
+.owner .dash-hbar-fill { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.owner .dash-hbar-val {
+  flex: none; font-size: 0.84rem; font-weight: 700; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* "needs attention" rows: icon chip + bold title + muted subtitle */
+.owner .dash-attn { display: flex; flex-direction: column; }
+.owner .dash-attn-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.owner .dash-attn-row:first-child { padding-top: 2px; }
+.owner .dash-attn-row:last-child { border-bottom: none; }
+.owner .dash-attn-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.owner .dash-attn-text strong { font-size: 0.92rem; line-height: 1.35; overflow-wrap: anywhere; }
+.owner .dash-attn-text .small { line-height: 1.35; overflow-wrap: anywhere; }
+
+/* ---- tables: muted header band on surface-2, rows split by 1px lines ---- */
+.owner .dash-scroll { overflow-x: auto; margin: 0 -20px; }
+.owner .dash-table { width: 100%; min-width: 300px; border-collapse: collapse; font-size: 0.9rem; }
+.owner .dash-table th {
+  padding: 8px 12px; background: var(--surface-2); color: var(--muted);
+  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+  white-space: nowrap; text-align: left;
+}
+.owner .dash-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.owner .dash-table tbody tr:last-child td { border-bottom: none; }
+.owner .dash-table th:first-child,
+.owner .dash-table td:first-child { padding-left: 20px; }
+.owner .dash-table th:last-child,
+.owner .dash-table td:last-child { padding-right: 20px; }
+.owner .dash-table .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.owner .dash-table td.num { font-weight: 700; }
+
+/* ---- bills: a table-like row that collapses to two lines on a phone ---- */
+.owner .dash-bills { display: flex; flex-direction: column; min-width: 0; }
+.owner .dash-bill-head,
+.owner .dash-bill {
+  display: grid;
+  grid-template-columns: 92px 48px 88px minmax(0, 1fr) auto auto;
+  gap: 2px 10px; align-items: baseline;
+}
+.owner .dash-bill-head {
+  padding: 0 0 8px; border-bottom: 1px solid var(--border);
+  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--muted);
+}
+.owner .dash-bill-head span:nth-child(5),
+.owner .dash-bill-head span:nth-child(6) { text-align: right; }
+.owner .dash-bill { padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+.owner .dash-bill:last-child { border-bottom: none; }
+.owner .dash-bill-time { font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.owner .dash-bill-q,
+.owner .dash-bill-ch { color: var(--muted); white-space: nowrap; }
+.owner .dash-bill-lines {
+  min-width: 0; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.owner .dash-bill-amt {
+  text-align: right; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.owner .dash-bill-status {
+  justify-self: end; display: inline-flex; align-items: center; gap: 6px;
+  font-size: 0.84rem; font-weight: 600; white-space: nowrap;
+}
+.owner .dash-bill-status.ok { color: var(--success); }
+.owner .dash-bill-status.warn { color: var(--warning); }
+.owner .dash-bill-status.bad { color: var(--danger); }
+
+/* ---- empty state ---- */
+.owner .dash-empty { align-items: center; text-align: center; gap: 8px; }
+
+/* ---- wide layout: 4 KPI cards, charts 2fr + attention 1fr ---- */
+@media (min-width: 1100px) {
+  .owner .dash-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .owner .dash-cols { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: start; }
+}
+
+/* ---- phone: selects go full width, each bill is a two-line row ---- */
+@media (max-width: 719px) {
+  .owner .dash-field { flex: 1 1 100%; max-width: none; }
+  .owner .dash-inline .dash-field { flex: 1 1 130px; max-width: none; }
+  .owner .dash-kpi-val { font-size: 1.5rem; }
+  .owner .dash-bill-head { display: none; }
+  .owner .dash-bill { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+  .owner .dash-bill-time { font-size: 0.86rem; }
+  .owner .dash-bill-amt { order: 4; margin-left: auto; }
+  .owner .dash-bill-lines { order: 5; flex: 1 1 auto; min-width: 0; }
+  .owner .dash-bill-status { order: 6; margin-left: auto; }
+}
+
+/* ==========================================================================
+   STAFF POS app (UI-4) — the counter/selling screen, scoped to `.pos`
+   (the root element of PosApp), so the legacy green tokens above stay
+   untouched. Same token names and values as the `.owner` scope: a warm
+   orange accent on neutral surfaces, light + dark.
+   Look: segmented channel pills, big scrollable text tabs for the types,
+   product CARDS in a grid, and on >= 900px a docked "ออเดอร์" panel.
+   ========================================================================== */
+
+.pos {
+  /* ---- light theme ---- */
+  --bg: #f6f6f7;
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --border: #ececee;
+  --text: #18181b;
+  --muted: #71717a;
+  --accent: #ea580c;
+  --accent-strong: #c2410c;
+  --accent-soft: #fff1e8;
+  --success: #16a34a;
+  --warning: #b45309;
+  --danger: #dc2626;
+  --success-soft: #e8f6ec;
+  --warning-soft: #fdf2e2;
+  --danger-soft: #fdeaea;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.04);
+  /* text colour that stays readable ON the accent / danger fills */
+  --accent-contrast: #ffffff;
+  --danger-contrast: #ffffff;
+  /* legacy names the shared classes still use → re-theme for free */
+  --green: var(--accent);
+  --green-dark: var(--accent-strong);
+  --card: var(--surface);
+
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 16px;
+  color-scheme: light;
+}
+.pos[data-theme="dark"] {
+  --bg: #0f1012;
+  --surface: #18191c;
+  --surface-2: #1f2024;
+  --border: #2a2b30;
+  --text: #f1f1f3;
+  --muted: #a1a1aa;
+  --accent: #fb923c;
+  --accent-strong: #fdba74;
+  --accent-soft: #3a2214;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --success-soft: rgba(74, 222, 128, 0.16);
+  --warning-soft: rgba(251, 191, 36, 0.16);
+  --danger-soft: rgba(248, 113, 113, 0.16);
+  --shadow: none;
+  color-scheme: dark;
+}
+.pos[data-theme="dark"] { --accent-contrast: #241403; --danger-contrast: #2a0b0b; }
+/* the page behind the app, so overscroll matches the theme */
+body:has(.pos) { background: #f6f6f7; }
+body:has(.pos[data-theme="dark"]) { background: #0f1012; }
+
+/* ---- shared bits, restyled for the counter ---- */
+.pos h2 { font-size: 1.05rem; font-weight: 700; }
+.pos button {
+  min-height: 44px;
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+}
+.pos .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pos .btn.ghost { background: transparent; }
+.pos .btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.pos input {
+  min-height: 46px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+}
+.pos input::placeholder { color: var(--muted); }
+.pos .card { background: var(--surface); border-color: var(--border); box-shadow: var(--shadow); }
+.pos .muted { color: var(--muted); }
+.pos .error { color: var(--danger); font-weight: 600; }
+.pos .spinner { border-color: var(--border); border-top-color: var(--accent); }
+.pos .key { background: var(--surface); border-color: var(--border); }
+.pos .key.ok { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pos .dot { border-color: var(--border); background: var(--surface); }
+.pos .dot.on { background: var(--accent); border-color: var(--accent); }
+.pos .staff-btn { background: var(--surface); border-color: var(--border); }
+.pos .sheet { background: var(--surface); border: 1px solid var(--border); border-bottom: none; box-shadow: var(--shadow); }
+.pos .chips { gap: 6px; }
+.pos .chip { background: var(--surface); border: 1px solid var(--border); color: var(--text); font-weight: 600; }
+.pos .chip-x { background: var(--danger-soft); color: var(--danger); border-left: none; }
+
+/* ---- staff header ---- */
+.pos .bar {
+  position: sticky; top: 0; z-index: 30; flex: none;
+  padding: 8px 12px;
+  padding-top: calc(8px + env(safe-area-inset-top));
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.pos .bar { gap: 8px; }
+.pos .bar .muted {
+  color: var(--muted); flex: 1 1 auto; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
+}
+.pos .bar .brand { flex: none; white-space: nowrap; }
+.pos .bar-actions { flex: none; }
+.pos .bar-actions { gap: 6px; }
+.pos .bar-btn {
+  min-height: 44px; padding: 4px 12px; font-size: 0.85rem; white-space: nowrap;
+  background: transparent; border-color: var(--border); color: var(--text);
+}
+.pos .pos-theme-btn {
+  width: 44px; min-width: 44px; min-height: 44px; padding: 0;
+  display: grid; place-items: center; color: var(--muted);
+}
+
+/* ---- selling screen frame: one column on a phone, builder + order on wide ---- */
+.pos .pos-content {
+  flex: 1 1 auto; min-height: 0; width: 100%; max-width: none;
+  padding: 0; gap: 0;
+}
+.pos .pos-cols { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.pos .pos-left { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.pos .pos-pinned {
+  position: sticky; bottom: 0; margin-top: auto; z-index: 20;
+  display: flex; flex-direction: column;
+}
+.pos .pos-order { display: none; }
+
+/* ---- channel: segmented pill group ---- */
+.pos .pos-seg {
+  display: flex; gap: 4px; padding: 4px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px;
+}
+.pos .pos-seg button {
+  flex: 1 1 0; min-width: 0; min-height: 40px; padding: 4px 6px;
+  border: 1px solid transparent; border-radius: 999px;
+  background: transparent; color: var(--muted);
+  font-size: 0.88rem; font-weight: 600; white-space: nowrap;
+}
+.pos .pos-seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pos[data-theme="dark"] .pos-seg button.on { color: #241403; }
+
+/* ---- types: horizontally scrollable BIG text tabs, no boxes ---- */
+.pos .pos-types {
+  display: flex; gap: 2px; align-items: stretch;
+  margin: 0 -16px; padding: 0 16px;
+  overflow-x: auto; overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  border-bottom: 1px solid var(--border);
+}
+.pos .pos-types::-webkit-scrollbar { display: none; }
+.pos .pos-type {
+  flex: none; min-height: 50px; padding: 4px 12px 6px;
+  display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 0;
+  background: transparent; border: 0; border-bottom: 3px solid transparent; border-radius: 0;
+  color: var(--muted); font-size: 21px; font-weight: 700; line-height: 1.2; white-space: nowrap;
+}
+.pos .pos-type.on { color: var(--text); border-bottom-color: var(--accent); }
+.pos .pos-type.soldout { opacity: 0.45; }
+.pos .pos-type-sub { font-size: 0.68rem; font-weight: 700; line-height: 1.2; }
+
+/* ---- group title: small + muted (the hint text keeps its own colour) ---- */
+.pos .pos-group-title { font-size: 0.82rem; font-weight: 700; color: var(--muted); }
+
+/* ---- choices: CARDS, name top-left / price bottom-right ---- */
+.pos .pos-choices {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;
+}
+.pos .pos-choice {
+  position: relative; min-height: 84px; padding: 10px 12px;
+  display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start;
+  text-align: left; border-radius: 14px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  font-size: 1rem; font-weight: 600; line-height: 1.3;
+  box-shadow: var(--shadow);
+  user-select: none; -webkit-user-select: none; touch-action: manipulation;
+}
+.pos .pos-choice.on {
+  background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: none;
+}
+.pos[data-theme="dark"] .pos-choice.on { color: #241403; }
+.pos .pos-choice.soldout { opacity: 0.45; }
+.pos .pos-choice-price {
+  align-self: flex-end; font-size: 0.88rem; font-weight: 700; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.pos .pos-choice.on .pos-choice-price { color: inherit; opacity: 0.9; }
+.pos .pos-choice-badge {
+  position: absolute; top: 6px; right: 6px;
+  min-width: 24px; height: 22px; padding: 0 7px;
+  display: grid; place-items: center; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent-strong);
+  font-size: 0.78rem; font-weight: 800;
+}
+.pos .pos-choice.on .pos-choice-badge { background: rgba(255, 255, 255, 0.24); color: inherit; }
+
+/* ---- phone: the cart is a bottom bar; wide: the docked panel below ---- */
+.pos .pos-bottombar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  background: var(--surface); border-top: 1px solid var(--border);
+}
+.pos .pos-nav { display: flex; background: var(--surface); border-top: 1px solid var(--border); }
+.pos .pos-nav button {
+  flex: 1; min-height: 56px; padding: 6px 4px;
+  border: 0; border-top: 3px solid transparent; border-radius: 0;
+  background: transparent; color: var(--muted);
+  font-size: 1rem; font-weight: 700;
+}
+.pos .pos-nav button.on { color: var(--accent-strong); border-top-color: var(--accent); }
+
+/* ---- the docked "ออเดอร์" panel (>= 900px only) ---- */
+.pos .pos-order-head {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 14px 16px 8px;
+}
+.pos .pos-order-title { margin: 0; flex: none; font-size: 1.15rem; font-weight: 800; }
+.pos .pos-mini {
+  min-height: 34px; min-width: 0; padding: 4px 12px;
+  border-radius: 999px; background: transparent; font-size: 0.82rem;
+}
+.pos .pos-order-scroll {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: 8px; padding: 0 16px 12px;
+}
+.pos .pos-order-empty { margin: 0; padding: 18px 0; text-align: center; font-size: 0.9rem; }
+.pos .pos-line {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 10px; display: flex; flex-direction: column; gap: 6px;
+}
+.pos .pos-line-top { display: flex; align-items: flex-start; gap: 8px; }
+.pos .pos-line-name { flex: 1 1 auto; min-width: 0; font-size: 0.95rem; font-weight: 700; line-height: 1.3; }
+.pos .pos-line-total { flex: none; font-size: 0.95rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pos .pos-line-opts { font-size: 0.8rem; color: var(--muted); line-height: 1.35; }
+.pos .pos-line-qty { display: flex; align-items: center; gap: 8px; }
+.pos .pos-line-qty button {
+  width: 38px; min-width: 38px; height: 38px; min-height: 38px; padding: 0;
+  display: grid; place-items: center; border-radius: 10px;
+  background: var(--surface-2); font-size: 1.1rem; font-weight: 700;
+}
+.pos .pos-line-qty span { min-width: 20px; text-align: center; font-size: 1rem; font-weight: 800; }
+.pos .pos-order-foot {
+  flex: none; display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 16px calc(14px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border); background: var(--surface-2);
+}
+.pos .pos-order-total { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.pos .pos-order-total .val {
+  font-size: 1.65rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.pos .pos-order-actions { display: flex; flex-direction: column; gap: 8px; }
+.pos .pos-order-actions button { width: 100%; }
+
+@media (min-width: 600px) {
+  .pos .pos-choices { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* ---- tablet/desktop: the builder scrolls on the left, the order is docked right ---- */
+@media (min-width: 900px) {
+  /* .pos and .pos-home sit on the SAME element: compound selector, not descendant */
+  .pos.pos-home { height: 100dvh; overflow: hidden; display: flex; flex-direction: column; }
+  .pos.pos-home .pos-content { display: flex; flex-direction: column; }
+  .pos.pos-home .pos-content > :first-child { flex: 1 1 auto; min-height: 0; }
+  .pos .pos-cols { min-height: 0; height: 100%; }
+  .pos .pos-cols { flex-direction: row; align-items: stretch; }
+  .pos .pos-left {
+    flex: 1 1 auto; height: 100%;
+    overflow-y: auto; overscroll-behavior: contain;
+  }
+  .pos .pos-bottombar { display: none; } /* the docked panel IS the cart here */
+  .pos .pos-order {
+    display: flex; flex-direction: column; flex: none;
+    width: 360px; height: 100%;
+    background: var(--surface-2); border-left: 1px solid var(--border);
+  }
+  .pos .pos-choices { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* ==========================================================================
+   STAFF POS auth screens (UI-5) — revoked / register / pending / staff picker
+   / PIN, restyled to match the counter screen above. Everything is scoped to
+   `.pos` and uses only the `.pos` tokens, so light and dark both work.
+   The screens have no header bar: the brand mark + shop name live in the card.
+   Visual only — the markup keeps its handlers, texts, aria-labels and the
+   `.pinpad` / `.key` class names the e2e tests select on.
+   ========================================================================== */
+
+/* the whole-screen centred column; the card is centred with auto margins so a
+   card taller than the viewport still scrolls instead of being clipped */
+.pos.pos-auth { min-height: 100dvh; }
+.pos .pos-auth-main {
+  flex: 1 1 auto; min-height: 0; width: 100%;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 24px 20px calc(24px + env(safe-area-inset-bottom));
+}
+.pos .pos-auth-card {
+  width: 100%; max-width: 420px; margin: auto 0;
+  display: flex; flex-direction: column; gap: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 28px;
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+/* the staff picker needs room for a 4-column grid of person cards */
+.pos .pos-auth-card.wide { max-width: 620px; }
+/* the PIN card is the tallest one: tighter padding so it fits a 390x844 phone */
+.pos .pos-auth-card.pin { gap: 12px; padding: 20px; }
+
+/* brand mark: orange rounded square, title, shop name */
+.pos .pos-auth-brand { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.pos .pos-auth-mark {
+  flex: none; width: 48px; height: 48px; border-radius: 14px;
+  display: grid; place-items: center;
+  background: var(--accent); color: var(--accent-contrast);
+}
+.pos .pos-auth-title { margin: 0; font-size: 1.25rem; font-weight: 800; letter-spacing: -0.01em; }
+.pos .pos-auth-shop { margin: 0; font-size: 0.88rem; }
+
+/* card body: left-aligned by default, centred where the content is short */
+.pos .pos-auth-fields { display: flex; flex-direction: column; gap: 10px; text-align: left; }
+.pos .pos-auth-fields.center { align-items: center; gap: 8px; text-align: center; }
+.pos .pos-auth-heading { font-size: 1.1rem; font-weight: 800; }
+.pos .pos-auth-card label { gap: 6px; font-size: 0.85rem; font-weight: 700; color: var(--muted); }
+
+/* register: big input + full-width accent button */
+.pos .pos-auth-input { min-height: 48px; border-radius: 12px; }
+.pos .pos-auth-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.pos .pos-auth-submit {
+  width: 100%; min-height: 52px; border-radius: 14px;
+  font-size: 1.05rem; font-weight: 700;
+}
+
+/* pending: accent spinner + the device code in a monospace pill */
+.pos .pos-auth-spinner { width: 40px; height: 40px; border-width: 4px; }
+.pos .pos-auth-code-row { margin: 0; }
+.pos .pos-auth-code {
+  display: inline-block; padding: 3px 12px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.95rem; font-weight: 700; letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* staff picker: person cards (avatar circle + name), 2 columns on a phone */
+.pos .pos-people { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.pos .pos-person {
+  min-height: 112px; padding: 14px 8px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  border-radius: 16px;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+  font-size: 1rem; font-weight: 700; line-height: 1.25;
+}
+.pos .pos-person:active { background: var(--accent-soft); border-color: var(--accent); }
+.pos .pos-person-avatar {
+  flex: none; width: 46px; height: 46px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-strong);
+  font-size: 1.25rem; font-weight: 800;
+}
+.pos .pos-person-name {
+  min-width: 0; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ghost text buttons ("รีเฟรช", "กลับ") */
+.pos .pos-auth-link {
+  min-height: 44px; padding: 6px 12px;
+  border: 0; border-radius: 10px;
+  background: transparent; color: var(--muted);
+  font-size: 0.95rem; font-weight: 600;
+}
+.pos .pos-auth-link:active { color: var(--accent-strong); }
+
+/* PIN: avatar + name, accent dots, big round-rect keys */
+.pos .pos-auth-user { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.pos .pos-auth-user h2 { font-size: 1.2rem; font-weight: 800; }
+.pos .pos-auth-avatar {
+  flex: none; width: 56px; height: 56px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-strong);
+  font-size: 1.5rem; font-weight: 800;
+}
+.pos .pos-auth-card .dots { gap: 12px; }
+.pos .pos-auth-card .dot {
+  width: 16px; height: 16px; border-width: 2px;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.pos .pos-auth-card .key {
+  min-height: 66px; padding: 0 4px;
+  border-radius: 16px;
+  background: var(--surface-2);
+  font-size: 26px; font-weight: 700; line-height: 1;
+}
+.pos .pos-auth-card .key:active { background: var(--accent-soft); border-color: var(--accent); }
+.pos .pos-auth-card .key.ok {
+  font-size: 1.1rem; color: var(--accent-contrast, #fff);
+  background: var(--accent); border-color: var(--accent);
+}
+.pos .pos-auth-card .key:disabled { opacity: 0.45; }
+
+@media (min-width: 700px) {
+  .pos .pos-people { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
 

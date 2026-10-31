@@ -20,6 +20,7 @@ pub mod devices;
 pub mod media;
 pub mod menu;
 pub mod orders;
+pub mod report;
 pub mod shops;
 pub mod staff;
 pub mod stock;
