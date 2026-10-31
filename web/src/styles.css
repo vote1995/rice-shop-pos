@@ -1240,3 +1240,179 @@ body:has(.pos[data-theme="dark"]) { background: #0f1012; }
 }
 
 
+
+/* ---- STAFF POS: staff meal (สวัสดิการ) + QR pay (mock Beam) ---- */
+.pos .pos-meal-toggle {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  width: 100%; min-height: 48px; padding: 8px 14px; border-radius: 14px;
+  border: 1.5px dashed var(--border); background: var(--surface); color: var(--text);
+  font-weight: 700; text-align: left;
+}
+.pos .pos-meal-toggle.on {
+  border-style: solid; border-color: var(--accent);
+  background: var(--accent-soft); color: var(--accent);
+}
+.pos .pos-meal-toggle:disabled { opacity: 0.5; }
+.pos .pos-meal-count { font-size: 0.85rem; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.pos .pos-meal-toggle.on .pos-meal-count { color: var(--accent); }
+.pos .pos-meal-badge {
+  flex: none; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700;
+  background: var(--accent-soft); color: var(--accent);
+}
+.pos .pos-order-mealband {
+  margin: -2px 0 8px; padding: 8px 12px; border-radius: 12px; text-align: center;
+  font-size: 0.9rem; font-weight: 700; background: var(--accent-soft); color: var(--accent);
+}
+.pos .pos-pay-seg { margin: 4px 0 2px; }
+.pos .pos-pay-seg > button { flex: 1; }
+.pos .pos-qr { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 4px 0; }
+.pos .pos-qr-box { background: #fff; border-radius: 16px; padding: 12px; line-height: 0; border: 1px solid var(--border); }
+.pos .pos-qr-amount { font-size: 2rem; font-weight: 800; }
+
+/* ==========================================================================
+   STAFF POS: stock count (นับสต็อก) — the third bottom-nav tab, the blind
+   count sheet of StockCount.tsx. Scoped to `.pos` and token-only, so light
+   and dark both work. One card per ingredient: name + unit, when it was
+   counted last, and a big number box; the accent left border marks a row the
+   staff already filled in.
+   ========================================================================== */
+
+.pos .pos-count {
+  /* grows with the sheet (never shrinks to the column): the column scrolls,
+     the save bar sticks above the pinned nav */
+  flex: 1 0 auto; min-width: 0;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px 16px 8px;
+}
+
+/* header: title + the "count what is really there" hint */
+.pos .pos-count-head { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 2px 0 4px; }
+.pos .pos-count-title { margin: 0; font-size: 1.25rem; font-weight: 800; letter-spacing: -0.01em; }
+.pos .pos-count-hint { margin: 0; font-size: 0.85rem; line-height: 1.45; color: var(--muted); }
+
+/* loading / load error / empty sheet */
+.pos .pos-count-state {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 32px 16px; text-align: center;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+.pos .pos-count-retry {
+  min-height: 44px; padding: 8px 18px; border-radius: 12px;
+  background: var(--surface-2); font-size: 0.95rem;
+}
+
+/* the sheet: one card row per ingredient */
+.pos .pos-count-list {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 2px 0 10px;
+}
+.pos .pos-count-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border); border-left: 4px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+/* a row the staff already keyed in gets the accent edge */
+.pos .pos-count-row.filled { border-left-color: var(--accent); }
+.pos .pos-count-info { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pos .pos-count-name {
+  font-size: 1rem; font-weight: 700; line-height: 1.3;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pos .pos-count-unit-tag {
+  margin-left: 6px; font-size: 0.76rem; font-weight: 600; color: var(--muted);
+  white-space: nowrap;
+}
+.pos .pos-count-meta { font-size: 0.78rem; line-height: 1.35; color: var(--muted); }
+
+/* the number box: ~110px of large digits + the unit as a suffix */
+.pos .pos-count-field {
+  flex: none; width: 138px;
+  display: flex; flex-direction: row; align-items: center; font-weight: 400; gap: 6px;
+  padding: 0 10px;
+  background: var(--surface-2);
+  border: 1.5px solid var(--border); border-radius: 12px;
+}
+.pos .pos-count-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.pos .pos-count-field.bad { border-color: var(--danger); }
+.pos .pos-count-field input {
+  flex: 1 1 auto; min-width: 0; width: 100%;
+  min-height: 48px; padding: 4px 0;
+  border: 0; border-radius: 0;
+  background: transparent; color: var(--text);
+  font-size: 22px; font-weight: 700; line-height: 1.2; text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.pos .pos-count-field input:focus { outline: none; box-shadow: none; }
+.pos .pos-count-field input::placeholder { color: var(--muted); opacity: 0.6; }
+/* no browser steppers next to the digits */
+.pos .pos-count-field input::-webkit-outer-spin-button,
+.pos .pos-count-field input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.pos .pos-count-field input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+.pos .pos-count-unit { flex: none; font-size: 0.82rem; font-weight: 600; color: var(--muted); }
+
+/* the sticky save bar: full width, accent, pinned above the bottom nav
+   (.pos-nav = 56px button + 1px border) in both the phone and the
+   tablet layout, where .pos-left itself is the scroll container */
+.pos .pos-count-save {
+  position: sticky;
+  bottom: calc(57px + env(safe-area-inset-bottom));
+  z-index: 15; margin-top: auto;
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 0 12px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+}
+.pos .pos-count-note { margin: 0; font-size: 0.85rem; font-weight: 600; line-height: 1.35; }
+.pos .pos-count-note.ok { color: var(--success); font-weight: 700; }
+.pos .pos-count-note.err { color: var(--danger); font-weight: 700; }
+.pos .pos-count-submit {
+  width: 100%; min-height: 52px; padding: 10px 14px; border-radius: 14px;
+  background: var(--accent); border-color: var(--accent); color: var(--accent-contrast);
+  font-size: 1.05rem; font-weight: 700;
+}
+.pos .pos-count-submit:disabled {
+  background: var(--surface-2); border-color: var(--border); color: var(--muted); opacity: 1;
+}
+
+/* three tabs share the bar now: a touch smaller so "นับสต็อก" fits a phone */
+.pos .pos-nav button { font-size: 0.95rem; }
+
+@media (min-width: 900px) {
+  .pos .pos-count { padding: 16px 20px 8px; }
+  .pos .pos-count-field { width: 168px; }
+  .pos .pos-nav button { font-size: 1rem; }
+}
+
+
+/* ---- OWNER: payment/staff-meal pair + "ตามสูตร vs ใช้จริง" chart ---- */
+@media (min-width: 900px) {
+  .owner .dash-cols.even { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.owner .sc-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.82rem; color: var(--muted); }
+.owner .sc-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.owner .sc-sw { width: 12px; height: 12px; border-radius: 4px; display: inline-block; }
+.owner .sc-sw.recipe { background: var(--border); }
+.owner .sc-sw.real { background: var(--accent); }
+.owner .sc-list { display: flex; flex-direction: column; gap: 14px; }
+.owner .sc-row { display: flex; flex-direction: column; gap: 4px; }
+.owner .sc-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.owner .sc-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owner .sc-verdict { flex: none; font-size: 0.82rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+.owner .sc-verdict.ok { background: var(--success-soft); color: var(--success); }
+.owner .sc-verdict.warn { background: var(--warning-soft); color: var(--warning); }
+.owner .sc-verdict.bad { background: var(--danger-soft); color: var(--danger); }
+.owner .sc-bar { display: grid; grid-template-columns: minmax(0, 1fr) 96px; align-items: center; gap: 8px; }
+.owner .sc-track { display: block; height: 12px; }
+.owner .sc-fill { display: block; height: 12px; border-radius: 6px; min-width: 2px; }
+.owner .sc-fill.recipe { background: var(--border); }
+.owner .sc-fill.real { background: var(--accent); }
+.owner .sc-fill.real.bad { background: var(--danger); }
+.owner .sc-fill.real.warn { background: var(--warning); }
+.owner .sc-num { flex: none; font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }

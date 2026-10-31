@@ -10,6 +10,8 @@
 //! restock/count are idempotent by `move_id`: the journal row and the qty
 //! change go in one batch and the change only applies when the journal row
 //! was written by THIS request (its created_at is this request's `now`).
+//! [`journaled_change`] / [`load_ingredient`] are shared with the staff blind
+//! count ([`crate::routes::stock_count`]).
 
 use axum::{
     extract::{Path, State},
@@ -122,12 +124,79 @@ fn clean_unit(raw: &str) -> Result<String, ApiError> {
     Ok(unit.to_owned())
 }
 
-async fn load_ingredient(env: &Env, id: &str) -> Result<Option<Ingredient>, ApiError> {
+/// One ingredient row by id, any shop (the owner endpoints address ids
+/// directly; the staff count re-reads it to check the shop).
+pub(crate) async fn load_ingredient(env: &Env, id: &str) -> Result<Option<Ingredient>, ApiError> {
     Ok(db::db(env)?
         .prepare(format!("SELECT {INGREDIENT_COLUMNS} FROM ingredients WHERE id = ?1"))
         .bind(&[txt(id)])?
         .first::<Ingredient>(None)
         .await?)
+}
+
+/// One journaled qty change (restock / count), idempotent by `move_id`.
+/// `(kind, delta_sql, new_qty_sql)`: the journal kind, its delta and the new
+/// qty, as SQL over the row (`qty` = current, `?3` = `value`). `user_id` is
+/// the mover (owner or staff); `shop_id` additionally scopes the ingredient
+/// to one shop (the staff count, [`crate::routes::stock_count`]) — `None`
+/// (the owner endpoints) addresses the ingredient by id alone, keeping the
+/// statements byte-identical.
+pub(crate) async fn journaled_change(
+    env: &Env,
+    shop_id: Option<&str>,
+    user_id: &str,
+    id: &str,
+    move_id: &str,
+    value: f64,
+    (kind, delta_sql, new_qty_sql): (&str, &str, &str),
+) -> Result<Json<Ingredient>, ApiError> {
+    let id = parse_uuid(id, "id")?.to_string();
+    let move_id = parse_uuid(move_id, "move_id")?.to_string();
+    let now = now_ms();
+    let mut params = vec![txt(&move_id), txt(kind), real(value), txt(user_id), int(now), txt(&id)];
+    // Staff scoping rides on ?7; the owner path adds no clause (same SQL).
+    let shop_scope = match shop_id {
+        Some(shop) => {
+            params.push(txt(shop));
+            " AND shop_id = ?7"
+        }
+        None => "",
+    };
+    db::db(env)?
+        .batch(vec![
+            db::db(env)?
+                .prepare(format!(
+                    "INSERT INTO stock_moves
+                       (id, shop_id, ingredient_id, order_id, kind, delta, created_by, created_at)
+                     SELECT ?1, shop_id, id, NULL, ?2, {delta_sql}, ?4, ?5
+                     FROM ingredients
+                     WHERE id = ?6{shop_scope}
+                       AND NOT EXISTS (SELECT 1 FROM stock_moves WHERE id = ?1)"
+                ))
+                .bind(&params)?,
+            db::db(env)?
+                .prepare(format!(
+                    "UPDATE ingredients SET qty = {new_qty_sql}, updated_at = ?5
+                     WHERE id = ?6{shop_scope}
+                       AND EXISTS (SELECT 1 FROM stock_moves
+                                   WHERE id = ?1 AND ingredient_id = ?6 AND created_at = ?5
+                                     AND kind = ?2 AND created_by = ?4)"
+                ))
+                .bind(&params)?,
+        ])
+        .await?;
+    let ingredient = load_ingredient(env, &id).await?.ok_or(ApiError::NotFound)?;
+    let move_ingredient = db::db(env)?
+        .prepare("SELECT ingredient_id FROM stock_moves WHERE id = ?1")
+        .bind(&[txt(&move_id)])?
+        .first::<String>(Some("ingredient_id"))
+        .await?;
+    if move_ingredient.as_deref() != Some(id.as_str()) {
+        return Err(ApiError::Conflict(format!(
+            "move {move_id} belongs to another ingredient"
+        )));
+    }
+    Ok(Json(ingredient))
 }
 
 async fn shop_exists(env: &Env, shop_id: &str) -> Result<bool, ApiError> {
@@ -255,56 +324,6 @@ pub async fn update_ingredient(
         .ok_or_else(|| ApiError::Internal(format!("ingredient {id} vanished")))
 }
 
-/// One journaled qty change (restock / count), idempotent by `move_id`.
-/// `(kind, delta_sql, new_qty_sql)`: the journal kind, its delta and the new
-/// qty, as SQL over the row (`qty` = current, `?3` = `value`).
-async fn journaled_change(
-    env: &Env,
-    owner: &OwnerAuth,
-    id: &str,
-    move_id: &str,
-    value: f64,
-    (kind, delta_sql, new_qty_sql): (&str, &str, &str),
-) -> Result<Json<Ingredient>, ApiError> {
-    let id = parse_uuid(id, "id")?.to_string();
-    let move_id = parse_uuid(move_id, "move_id")?.to_string();
-    let now = now_ms();
-    db::db(env)?
-        .batch(vec![
-            db::db(env)?
-                .prepare(format!(
-                    "INSERT INTO stock_moves
-                       (id, shop_id, ingredient_id, order_id, kind, delta, created_by, created_at)
-                     SELECT ?1, shop_id, id, NULL, ?2, {delta_sql}, ?4, ?5
-                     FROM ingredients
-                     WHERE id = ?6 AND NOT EXISTS (SELECT 1 FROM stock_moves WHERE id = ?1)"
-                ))
-                .bind(&[txt(&move_id), txt(kind), real(value), txt(&owner.user_id), int(now), txt(&id)])?,
-            db::db(env)?
-                .prepare(format!(
-                    "UPDATE ingredients SET qty = {new_qty_sql}, updated_at = ?5
-                     WHERE id = ?6
-                       AND EXISTS (SELECT 1 FROM stock_moves
-                                   WHERE id = ?1 AND ingredient_id = ?6 AND created_at = ?5
-                                     AND kind = ?2 AND created_by = ?4)"
-                ))
-                .bind(&[txt(&move_id), txt(kind), real(value), txt(&owner.user_id), int(now), txt(&id)])?,
-        ])
-        .await?;
-    let ingredient = load_ingredient(env, &id).await?.ok_or(ApiError::NotFound)?;
-    let move_ingredient = db::db(env)?
-        .prepare("SELECT ingredient_id FROM stock_moves WHERE id = ?1")
-        .bind(&[txt(&move_id)])?
-        .first::<String>(Some("ingredient_id"))
-        .await?;
-    if move_ingredient.as_deref() != Some(id.as_str()) {
-        return Err(ApiError::Conflict(format!(
-            "move {move_id} belongs to another ingredient"
-        )));
-    }
-    Ok(Json(ingredient))
-}
-
 #[worker::send]
 pub async fn restock(
     State(state): State<AppState>,
@@ -315,8 +334,16 @@ pub async fn restock(
     if check_qty(body.amount, "amount")? <= 0.0 {
         return Err(ApiError::BadRequest("amount must be > 0".into()));
     }
-    journaled_change(&state.env, &owner, &id, &body.move_id, body.amount, ("restock", "?3", "qty + ?3"))
-        .await
+    journaled_change(
+        &state.env,
+        None,
+        &owner.user_id,
+        &id,
+        &body.move_id,
+        body.amount,
+        ("restock", "?3", "qty + ?3"),
+    )
+    .await
 }
 
 #[worker::send]
@@ -327,7 +354,7 @@ pub async fn count(
     ApiJson(body): ApiJson<CountBody>,
 ) -> Result<Json<Ingredient>, ApiError> {
     let qty = check_qty(body.qty, "qty")?;
-    journaled_change(&state.env, &owner, &id, &body.move_id, qty, ("count", "?3 - qty", "?3")).await
+    journaled_change(&state.env, None, &owner.user_id, &id, &body.move_id, qty, ("count", "?3 - qty", "?3")).await
 }
 
 /// Replace every use of ONE target (a menu item = every plate, or an option =

@@ -466,6 +466,9 @@ export interface Order {
   cancel_reason: string | null
   /** NULL = the plates are not out yet (a paid bill can still be cooking). */
   served_at: number | null
+  /** สวัสดิการพนักงาน: the staff member's own plate, billed 0 and never
+   *  counted as a sale (migration 0007). */
+  staff_meal: boolean
   items: OrderItem[]
 }
 
@@ -555,6 +558,39 @@ export interface ReportIngredientRow {
   name: string
   unit: string
   used: number
+  /** of `used`, what went into staff meals (สวัสดิการ). */
+  staff_used: number
+}
+
+/** Paid bills by payment method ('cash' | 'promptpay' | 'delivery_app' …). */
+export interface ReportMethodRow {
+  method: string
+  bills: number
+  net: number
+}
+
+/** Staff meals (สวัสดิการ) per staff member; value = menu price in satang. */
+export interface ReportStaffMealRow {
+  user_id: string
+  name: string
+  plates: number
+  value: number
+}
+
+/**
+ * The stock journal of one Bangkok day and ingredient. On a day with
+ * counts > 0: real use = recipe_use - count_delta (a count that finds LESS
+ * than the estimate = more went out than the recipe says).
+ */
+export interface ReportStockCheckRow {
+  day: string
+  ingredient_id: string
+  name: string
+  unit: string
+  recipe_use: number
+  restock: number
+  count_delta: number
+  counts: number
 }
 
 /** One bill of the capped list; `lines` is a ready-made "2× ข้าวมัน, …" text. */
@@ -563,7 +599,8 @@ export interface ReportBillRow {
   queue_number: number
   created_at: number
   channel: OrderChannel
-  status: OrderStatus
+  /** + 'staff' / 'staff_cancelled' for staff meals (สวัสดิการ, never a sale). */
+  status: OrderStatus | 'staff' | 'staff_cancelled'
   net: number
   lines: string | null
 }
@@ -581,4 +618,8 @@ export interface ReportData {
   bills: ReportBillRow[]
   /** the list above never grows past this — show "แสดง N บิลล่าสุด" when equal. */
   bills_capped_at: number
+  by_method: ReportMethodRow[]
+  staff_meals: ReportStaffMealRow[]
+  /** NOT narrowed by the bill filters: the whole date range. */
+  stock_check: ReportStockCheckRow[]
 }

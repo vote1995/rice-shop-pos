@@ -66,7 +66,7 @@ const MAX_DAY_ORDERS: i64 = 500;
 /// their bill.
 const ORDER_COLUMNS: &str = "id, queue_number, order_type, channel, table_no, note, status, \
      total_amount, discount_amount, created_by, created_at, paid_at, cancelled_at, cancel_reason, \
-     served_at";
+     served_at, staff_meal";
 const ITEM_COLUMNS: &str = "id, order_id, menu_item_id, item_name, options_json, quantity, \
      note, unit_price, discount_amount, line_total";
 const PAYMENT_COLUMNS: &str = "id, order_id, method, amount, cash_received, cash_change, \
@@ -172,6 +172,7 @@ struct OrderRow {
     cancelled_at: Option<i64>,
     cancel_reason: Option<String>,
     served_at: Option<i64>,
+    staff_meal: i64,
 }
 
 /// One order_items row of the day window.
@@ -465,6 +466,7 @@ fn order_json(row: OrderRow, items: Vec<OrderItemJson>) -> OrderJson {
         cancelled_at: row.cancelled_at,
         cancel_reason: row.cancel_reason,
         served_at: row.served_at,
+        staff_meal: row.staff_meal != 0,
         items,
     }
 }
@@ -1113,6 +1115,7 @@ mod tests {
             cancelled_at: None,
             cancel_reason: None,
             served_at: None,
+            staff_meal: 0,
         }
     }
 

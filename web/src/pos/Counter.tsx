@@ -13,6 +13,7 @@ import { ApiError, api, errorCode, friendlyError } from '../api'
 import type { MenuData, MenuItem, MenuOption, Order } from '../api'
 import { applicableGroups, bahtToSatang, fmtBaht, priceLine, validateLine } from './pricing'
 import type { Channel, GroupWithOptions } from './pricing'
+import StockCount from './StockCount'
 
 // ---------------------------------------------------------------------------
 // Constants / small helpers
@@ -352,7 +353,8 @@ export default function Counter({
   onSessionExpired: () => void
   onRevoked: () => void
 }) {
-  const [tab, setTab] = useState<'sell' | 'queue'>('sell')
+  /** Bottom-nav tab: ขาย (sell) / คิว (queue) / นับสต็อก (blind stock count). */
+  const [tab, setTab] = useState<'sell' | 'queue' | 'count'>('sell')
   const [menu, setMenu] = useState<MenuData | null>(null)
   const [menuErr, setMenuErr] = useState('')
   const [menuLoading, setMenuLoading] = useState(true)
@@ -370,6 +372,9 @@ export default function Counter({
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState<ToastState | null>(null)
+  // สวัสดิการพนักงาน: the toggle + today's used/left plates of this staff member
+  const [staffMealOn, setStaffMealOn] = useState(false)
+  const [meals, setMeals] = useState<{ used: number; limit: number }>({ used: 0, limit: 2 })
 
   // keep the latest callbacks without re-creating the poller below
   const expiredRef = useRef(onSessionExpired)
@@ -435,6 +440,27 @@ export default function Counter({
     }
   }, [])
 
+  /** GET /api/staff/meals: how many staff-meal plates this person took today. */
+  const loadStaffMeals = useCallback(async () => {
+    try {
+      const d = await api<{ used: number; limit: number }>(
+        'GET',
+        '/api/staff/meals',
+        undefined,
+        'both',
+      )
+      if (Number.isFinite(d.used) && Number.isFinite(d.limit)) {
+        setMeals({ used: d.used, limit: d.limit })
+      }
+    } catch {
+      // non-critical: the toggle keeps the last known count
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadStaffMeals()
+  }, [loadStaffMeals])
+
   // 10 s polling while visible + on focus + after every action
   useEffect(() => {
     void loadOrders()
@@ -474,8 +500,10 @@ export default function Counter({
    * Runs one mutation: busy flag, friendly Thai error, 401 session/revoked
    * hand-off, 409 -> reload the queue. Network/5xx NEVER clears the cart and
    * NEVER logs out (the client ids make the retry idempotent).
+   * `onErr` replaces the default "set the red message" (e.g. the staff-meal
+   * limit 409 wants a toast instead).
    */
-  async function run<T>(fn: () => Promise<T>): Promise<T | null> {
+  async function run<T>(fn: () => Promise<T>, onErr?: (e: unknown) => void): Promise<T | null> {
     setBusy(true)
     try {
       const r = await fn()
@@ -490,7 +518,8 @@ export default function Counter({
         revokedRef.current()
         return null
       }
-      setMsg(friendlyError(e))
+      if (onErr) onErr(e)
+      else setMsg(friendlyError(e))
       if (e instanceof ApiError && (e.status === 409 || e.status === 404)) void loadOrders()
       return null
     } finally {
@@ -503,6 +532,16 @@ export default function Counter({
   const cart = drafts.current
   /** The channel that prices what is on screen right now. */
   const activeChannel: Channel = addTo ? normalizeChannel(addTo.channel) : channel
+
+  /** Staff meals left today (Bangkok day, counted by the server). */
+  const mealsLeft = Math.max(0, meals.limit - meals.used)
+  /** The welfare plate is the staff member's own COUNTER order, max 2 a day. */
+  const staffMealOk = addTo === null && channel === 'counter' && mealsLeft > 0
+
+  // the toggle can never stay on once its precondition is gone
+  useEffect(() => {
+    if (staffMealOn && !staffMealOk) setStaffMealOn(false)
+  }, [staffMealOn, staffMealOk])
 
   const items = useMemo(
     () =>
@@ -619,6 +658,11 @@ export default function Counter({
 
   /** Adds/merges one line; returns false when the bill is already full. */
   function pushLine(item: MenuItem, optionIds: string[]): boolean {
+    // a staff meal is exactly ONE plate: the second pick never lands in the cart
+    if (staffMealOn && cart.lines.length > 0) {
+      flash('สวัสดิการได้ 1 จานต่อครั้ง')
+      return false
+    }
     const lines = [...cart.lines]
     const idx = lines.findIndex(
       (l) => l.menu_item_id === item.id && samePicks(l.option_ids, optionIds),
@@ -642,6 +686,11 @@ export default function Counter({
   }
 
   function setLineQty(id: string, delta: number) {
+    // a staff meal stays one plate: no "+" while the welfare toggle is on
+    if (staffMealOn && delta > 0) {
+      flash('สวัสดิการได้ 1 จานต่อครั้ง')
+      return
+    }
     setDrafts((prev) => {
       const lines = prev.current.lines
         .map((l) => (l.id === id ? { ...l, quantity: l.quantity + delta } : l))
@@ -859,6 +908,57 @@ export default function Counter({
     }
   }
 
+  /**
+   * สวัสดิการพนักงาน: the staff member's own plate, closed by the server at
+   * insert (total 0, status paid) — no pay sheet ever opens, the plate just
+   * goes to the kitchen queue. Same idempotent order id as a normal bill.
+   */
+  async function submitStaffMeal() {
+    if (busy || cart.lines.length === 0 || addTo) return
+    if (cartCount !== 1) {
+      flash('สวัสดิการได้ 1 จานต่อครั้ง')
+      return
+    }
+    const err = firstLineError()
+    if (err) {
+      setMsg(err)
+      return
+    }
+    const order = await run(
+      () =>
+        api<Order>(
+          'POST',
+          '/api/orders',
+          {
+            id: cart.id, // idempotent retry keeps the SAME id
+            order_type: 'dine_in',
+            channel: 'counter',
+            table_no: null,
+            note: null,
+            items: lineBodies(),
+            staff_meal: true,
+          },
+          'both',
+        ),
+      (e) => {
+        if (e instanceof ApiError && e.status === 409 && e.message.includes('staff meal limit')) {
+          // someone else on this PIN already used today's plates
+          flash('วันนี้ใช้สิทธิ์ครบ 2 จานแล้ว')
+          setStaffMealOn(false)
+        } else {
+          setMsg(friendlyError(e))
+        }
+      },
+    )
+    void loadStaffMeals() // refresh the counter either way
+    if (!order) return // network/5xx: keep the cart, the retry is safe
+    setDrafts((prev) => ({ ...prev, current: blankCart('counter') }))
+    setPicks([])
+    setStaffMealOn(false)
+    void loadOrders()
+    flash('ส่งครัวแล้ว (สวัสดิการ)')
+  }
+
   async function submitAddTo() {
     if (!addTo || busy || cart.lines.length === 0) return
     const err = firstLineError()
@@ -933,7 +1033,7 @@ export default function Counter({
 
   async function payOrder(
     o: Order,
-    method: 'cash' | 'delivery_app',
+    method: 'cash' | 'delivery_app' | 'promptpay',
     paymentId: string,
     cashReceived?: number,
   ) {
@@ -989,7 +1089,7 @@ export default function Counter({
       <div className="pos-cols">
         {/* left column: channel -> type -> builder (and the queue tab) */}
         <div className="pos-left">
-          {tab === 'sell' ? renderSell() : renderQueue()}
+          {tab === 'sell' ? renderSell() : tab === 'queue' ? renderQueue() : renderCount()}
 
           {/* everything the staff must always see stays pinned to the bottom */}
           <div className="pos-pinned">
@@ -1051,7 +1151,9 @@ export default function Counter({
                   <span style={{ display: 'block', fontSize: 13, color: GREEN, fontWeight: 600 }}>
                     ตะกร้า {cartCount} รายการ · ดู/แก้
                   </span>
-                  <span style={{ display: 'block', fontSize: 20, fontWeight: 700 }}>{baht(cartTotal)}</span>
+                  <span style={{ display: 'block', fontSize: 20, fontWeight: 700 }}>
+                    {baht(staffMealOn ? 0 : cartTotal)}
+                  </span>
                 </button>
                 {addTo ? (
                   <button
@@ -1061,6 +1163,15 @@ export default function Counter({
                     onClick={() => void submitAddTo()}
                   >
                     เพิ่มเข้าคิว #{addTo.queue_number}
+                  </button>
+                ) : staffMealOn ? (
+                  <button
+                    type="button"
+                    style={S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN)}
+                    disabled={busy || cartHasError}
+                    onClick={() => void submitStaffMeal()}
+                  >
+                    ส่งครัว (สวัสดิการ)
                   </button>
                 ) : (
                   <>
@@ -1102,6 +1213,14 @@ export default function Counter({
               >
                 {queueOrders.length > 0 ? `คิว (${queueOrders.length})` : 'คิว'}
               </button>
+              <button
+                type="button"
+                className={tab === 'count' ? 'on' : ''}
+                aria-current={tab === 'count' ? 'page' : undefined}
+                onClick={() => setTab('count')}
+              >
+                นับสต็อก
+              </button>
             </nav>
           </div>
         </div>
@@ -1115,6 +1234,7 @@ export default function Counter({
           held={drafts.held}
           addToNo={addTo?.queue_number ?? null}
           busy={busy}
+          staffMeal={staffMealOn}
           onQty={setLineQty}
           onHold={holdCart}
           onRestore={restoreHeld}
@@ -1123,6 +1243,7 @@ export default function Counter({
           onSend={() => void submitCart(false)}
           onPay={() => void submitCart(true)}
           onSendAddTo={() => void submitAddTo()}
+          onStaffMeal={() => void submitStaffMeal()}
         />
       </div>
 
@@ -1132,6 +1253,7 @@ export default function Counter({
           total={cartTotal}
           held={drafts.held}
           addToNo={addTo?.queue_number ?? null}
+          staffMeal={staffMealOn}
           onClose={() => setCartOpen(false)}
           onQty={setLineQty}
           onHold={holdCart}
@@ -1153,6 +1275,7 @@ export default function Counter({
           }}
           onCash={(paymentId, satang) => void payOrder(payFor, 'cash', paymentId, satang)}
           onApp={(paymentId) => void payOrder(payFor, 'delivery_app', paymentId)}
+          onPromptpay={(paymentId) => void payOrder(payFor, 'promptpay', paymentId)}
         />
       ) : null}
 
@@ -1259,19 +1382,34 @@ export default function Counter({
             </button>
           </div>
         ) : (
-          <div className="pos-seg" role="group" aria-label="ช่องทางขาย">
-            {CHANNELS.map((c) => (
-              <button
-                type="button"
-                key={c.id}
-                className={channel === c.id ? 'on' : ''}
-                aria-pressed={channel === c.id}
-                onClick={() => pickChannel(c.id)}
-              >
-                {c.label}
-              </button>
-            ))}
-          </div>
+          <>
+            <div className="pos-seg" role="group" aria-label="ช่องทางขาย">
+              {CHANNELS.map((c) => (
+                <button
+                  type="button"
+                  key={c.id}
+                  className={channel === c.id ? 'on' : ''}
+                  aria-pressed={channel === c.id}
+                  onClick={() => pickChannel(c.id)}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+            {/* สวัสดิการพนักงาน: only at the counter and only while a plate is left */}
+            <button
+              type="button"
+              className={`pos-meal-toggle${staffMealOn ? ' on' : ''}`}
+              aria-pressed={staffMealOn}
+              disabled={busy || !staffMealOk}
+              onClick={() => setStaffMealOn((v) => !v)}
+            >
+              <span>ทำกินเอง (สวัสดิการ)</span>
+              <span className="pos-meal-count">
+                เหลือ {mealsLeft}/{meals.limit} วันนี้
+              </span>
+            </button>
+          </>
         )}
 
         <div className="pos-types" aria-label="ประเภทเมนู">
@@ -1399,6 +1537,15 @@ export default function Counter({
     )
   }
 
+  // ---- COUNT -------------------------------------------------------------
+
+  /** นับสต็อก: the whole screen lives in StockCount.tsx (blind count sheet). */
+  function renderCount() {
+    return (
+      <StockCount onSessionExpired={onSessionExpired} onRevoked={onRevoked} />
+    )
+  }
+
   function statusPill(o: Order): { label: string; style: CSSProperties } {
     if (o.served_at === null && o.status !== 'paid') {
       return { label: 'กำลังทำ', style: S.pill('var(--warning-soft)', 'var(--warning)') }
@@ -1412,6 +1559,8 @@ export default function Counter({
   function renderOrder(o: Order) {
     const pill = statusPill(o)
     const paid = o.status === 'paid'
+    // a staff meal is already paid (฿0) but may still be voided before serving
+    const cancellable = !paid || (o.staff_meal && o.served_at === null)
     return (
       <div
         key={o.id}
@@ -1430,6 +1579,7 @@ export default function Counter({
           <span style={{ fontSize: 14, color: MUTED, flex: 1, minWidth: 0 }}>
             {CHANNEL_LABEL[o.channel] ?? o.channel}
           </span>
+          {o.staff_meal ? <span className="pos-meal-badge">สวัสดิการ</span> : null}
           <span
             style={{
               fontSize: 13,
@@ -1462,9 +1612,9 @@ export default function Counter({
 
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
           <span style={{ fontSize: 18, fontWeight: 700, flex: 1, minWidth: 60 }}>
-            {baht(o.total_amount)}
+            {o.staff_meal ? 'ฟรี' : baht(o.total_amount)}
           </span>
-          {!paid ? (
+          {cancellable ? (
             <button
               type="button"
               style={{ ...S.cardBtn('none', RED, 'transparent'), background: 'none' }}
@@ -1526,6 +1676,7 @@ function OrderPanel({
   held,
   addToNo,
   busy,
+  staffMeal,
   onQty,
   onHold,
   onRestore,
@@ -1534,6 +1685,7 @@ function OrderPanel({
   onSend,
   onPay,
   onSendAddTo,
+  onStaffMeal,
 }: {
   lines: PricedCartLine[]
   total: number
@@ -1542,6 +1694,8 @@ function OrderPanel({
   held: Cart[]
   addToNo: number | null
   busy: boolean
+  /** สวัสดิการพนักงาน mode: ฿0 total and a single "ส่งครัว" button. */
+  staffMeal: boolean
   onQty: (id: string, delta: number) => void
   onHold: () => void
   onRestore: (i: number) => void
@@ -1550,10 +1704,14 @@ function OrderPanel({
   onSend: () => void
   onPay: () => void
   onSendAddTo: () => void
+  onStaffMeal: () => void
 }) {
   const empty = lines.length === 0
   return (
     <aside className="pos-order" aria-label="ออเดอร์">
+      {staffMeal ? (
+        <div className="pos-order-mealband">สวัสดิการพนักงาน — ฟรี ไม่คิดเงิน</div>
+      ) : null}
       <div className="pos-order-head">
         <h2 className="pos-order-title">ออเดอร์</h2>
         {!empty ? <span className="muted small">{count} รายการ</span> : null}
@@ -1583,7 +1741,9 @@ function OrderPanel({
           <div key={c.line.id} className="pos-line">
             <div className="pos-line-top">
               <span className="pos-line-name">{c.name}</span>
-              <span className="pos-line-total">{c.total !== null ? baht(c.total) : '—'}</span>
+              <span className="pos-line-total">
+                {c.total !== null ? baht(staffMeal ? 0 : c.total) : '—'}
+              </span>
             </div>
             {c.optionsText ? <div className="pos-line-opts">{c.optionsText}</div> : null}
             {c.error ? <div className="error small">{c.error}</div> : null}
@@ -1595,7 +1755,7 @@ function OrderPanel({
               <button
                 type="button"
                 aria-label="เพิ่มจำนวน"
-                disabled={c.line.quantity >= 99}
+                disabled={staffMeal || c.line.quantity >= 99}
                 onClick={() => onQty(c.line.id, 1)}
               >
                 +
@@ -1628,9 +1788,18 @@ function OrderPanel({
       <div className="pos-order-foot">
         <div className="pos-order-total">
           <span className="muted">รวม</span>
-          <span className="val">{baht(total)}</span>
+          <span className="val">{baht(staffMeal ? 0 : total)}</span>
         </div>
-        {addToNo !== null ? (
+        {staffMeal ? (
+          <button
+            type="button"
+            style={S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN)}
+            disabled={busy || hasError || empty}
+            onClick={onStaffMeal}
+          >
+            ส่งครัว (สวัสดิการ)
+          </button>
+        ) : addToNo !== null ? (
           <button
             type="button"
             style={S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN)}
@@ -1679,6 +1848,7 @@ function CartSheet({
   total,
   held,
   addToNo,
+  staffMeal,
   onClose,
   onQty,
   onHold,
@@ -1690,6 +1860,8 @@ function CartSheet({
   total: number
   held: Cart[]
   addToNo: number | null
+  /** สวัสดิการพนักงาน mode: ฿0 total, one plate only. */
+  staffMeal: boolean
   onClose: () => void
   onQty: (id: string, delta: number) => void
   onHold: () => void
@@ -1705,6 +1877,9 @@ function CartSheet({
         aria-label="ตะกร้า"
         onClick={(e) => e.stopPropagation()}
       >
+        {staffMeal ? (
+          <div className="pos-order-mealband">สวัสดิการพนักงาน — ฟรี ไม่คิดเงิน</div>
+        ) : null}
         <div style={{ display: 'flex', alignItems: 'center' }}>
           <h2 style={{ flex: 1 }}>
             ตะกร้า{addToNo ? ` · เพิ่มเข้าคิว #${addToNo}` : ''}
@@ -1747,13 +1922,13 @@ function CartSheet({
               type="button"
               aria-label="เพิ่มจำนวน"
               style={S.cardBtn('var(--surface-2)', INK, 'var(--border)')}
-              disabled={c.line.quantity >= 99}
+              disabled={staffMeal || c.line.quantity >= 99}
               onClick={() => onQty(c.line.id, 1)}
             >
               +
             </button>
             <span style={{ width: 58, textAlign: 'right', fontSize: 15, fontWeight: 600 }}>
-              {c.total !== null ? baht(c.total) : '—'}
+              {c.total !== null ? baht(staffMeal ? 0 : c.total) : '—'}
             </span>
           </div>
         ))}
@@ -1789,7 +1964,7 @@ function CartSheet({
           disabled={lines.length === 0}
           onClick={onClose}
         >
-          เสร็จ · {baht(total)}
+          เสร็จ · {baht(staffMeal ? 0 : total)}
         </button>
         <p className="muted small center-text">
           ราคานี้เป็นยอดคำนวณหน้าจอ — ยอดจริงตามที่ระบบคิดหลังส่งครัว
@@ -1803,6 +1978,35 @@ function CartSheet({
 // Pay sheet: one tap closes a cash bill; delivery is settled in the app
 // ---------------------------------------------------------------------------
 
+/**
+ * A QR-looking placeholder until Beam is wired: a deterministic module grid
+ * from the order id plus the three finder squares. It encodes nothing - the
+ * staff confirms the transfer by hand ("ลูกค้าโอนแล้ว").
+ */
+function MockQr({ seed }: { seed: string }) {
+  const N = 25
+  let h = 2166136261
+  for (const ch of seed) h = Math.imul(h ^ ch.charCodeAt(0), 16777619)
+  const finder = (x: number, y: number) =>
+    [[0, 0], [N - 7, 0], [0, N - 7]].some(([fx, fy]) => x >= fx && x < fx + 7 && y >= fy && y < fy + 7)
+  const cells: string[] = []
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      if (finder(x, y)) continue
+      h = Math.imul(h ^ (x * 31 + y), 16777619)
+      if ((h >>> 7) & 1) cells.push(`M${x} ${y}h1v1h-1z`)
+    }
+  }
+  const eye = (x: number, y: number) =>
+    `M${x} ${y}h7v7h-7zM${x + 1} ${y + 1}v5h5v-5zM${x + 2} ${y + 2}h3v3h-3z`
+  return (
+    <svg viewBox={`-1 -1 ${N + 2} ${N + 2}`} width="200" height="200" role="img" aria-label="QR ทดลอง">
+      <path d={cells.join('')} fill="#111" />
+      <path d={eye(0, 0) + eye(N - 7, 0) + eye(0, N - 7)} fill="#111" fillRule="evenodd" />
+    </svg>
+  )
+}
+
 function PaySheet({
   order,
   busy,
@@ -1810,6 +2014,7 @@ function PaySheet({
   onClose,
   onCash,
   onApp,
+  onPromptpay,
 }: {
   order: Order
   busy: boolean
@@ -1817,10 +2022,12 @@ function PaySheet({
   onClose: () => void
   onCash: (paymentId: string, cashSatang: number) => void
   onApp: (paymentId: string) => void
+  onPromptpay: (paymentId: string) => void
 }) {
   // one payment id per sheet open — a retry after a network error reuses it
   const [paymentId] = useState(() => crypto.randomUUID())
   const [other, setOther] = useState('')
+  const [mode, setMode] = useState<'cash' | 'qr'>('cash')
   const total = order.total_amount
   const counter = order.channel === 'counter'
   const otherSat = bahtToSatang(other)
@@ -1856,7 +2063,9 @@ function PaySheet({
               คิว #{result.order.queue_number} ·{' '}
               {cash
                 ? `รับ ${baht(result.payment.cash_received ?? 0)}`
-                : `${CHANNEL_LABEL[result.order.channel] ?? result.order.channel}`}
+                : result.payment.method === 'promptpay'
+                  ? 'QR พร้อมเพย์'
+                  : `${CHANNEL_LABEL[result.order.channel] ?? result.order.channel}`}
               {result.order.served_at === null ? ' · รอเสิร์ฟ' : ''}
             </span>
             <button
@@ -1886,6 +2095,43 @@ function PaySheet({
         </div>
 
         {counter ? (
+          <div className="pos-seg pos-pay-seg" role="group" aria-label="วิธีชำระเงิน">
+            <button
+              type="button"
+              className={mode === 'cash' ? 'on' : ''}
+              aria-pressed={mode === 'cash'}
+              onClick={() => setMode('cash')}
+            >
+              เงินสด
+            </button>
+            <button
+              type="button"
+              className={mode === 'qr' ? 'on' : ''}
+              aria-pressed={mode === 'qr'}
+              onClick={() => setMode('qr')}
+            >
+              QR พร้อมเพย์
+            </button>
+          </div>
+        ) : null}
+
+        {counter && mode === 'qr' ? (
+          <div className="pos-qr">
+            <div className="pos-qr-box">
+              <MockQr seed={order.id} />
+            </div>
+            <span className="pos-qr-amount">{baht(total)}</span>
+            <span className="muted small">QR ทดลอง — ยังไม่เชื่อม Beam</span>
+            <button
+              type="button"
+              style={{ ...S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN), width: '100%' }}
+              disabled={busy}
+              onClick={() => onPromptpay(paymentId)}
+            >
+              ลูกค้าโอนแล้ว
+            </button>
+          </div>
+        ) : counter ? (
           <>
             <div style={{ fontSize: 14, color: MUTED }}>ลูกค้าให้เงินมา — กดครั้งเดียวจบ</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>

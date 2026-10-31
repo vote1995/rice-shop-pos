@@ -13,8 +13,12 @@
 //! per statement): money from paid bills minus their refunds, plates / menu /
 //! choice counts from the lines of paid bills (narrowed to the filtered type
 //! / choice when given), ingredient use from the stock journal of those
-//! bills (a cancelled bill nets to zero there). Six aggregate statements plus
-//! one capped bill list - never a query per bill.
+//! bills (a cancelled bill nets to zero there), the payment-method split and
+//! the staff meals (สวัสดิการ, status `staff`) of those bills. `stock_check`
+//! is the one figure NOT narrowed by the bill filters: the stock journal per
+//! day and ingredient (recipe use vs restock vs real counts) over the date
+//! range. Aggregate statements plus one capped bill list in ONE batch - never
+//! a query per bill.
 
 use axum::{
     extract::{Path, RawQuery, State},
@@ -37,9 +41,15 @@ const MAX_BILLS: i64 = 200;
 
 /// The filtered bills. Binds: ?1 shop, ?2 from ms, ?3 to ms (exclusive),
 /// ?4/?5 time-of-day window ms, ?6 menu item | NULL, ?7 option | NULL,
-/// ?8 ingredient | NULL. `tod` = ms since Bangkok midnight.
+/// ?8 ingredient | NULL. `tod` = ms since Bangkok midnight. Staff meals (migration
+/// 0007) get status `staff` (`staff_cancelled`): never a sale, so every
+/// `status = 'paid'` figure below leaves them out by itself.
 const MATCHED: &str = "WITH m AS (
-  SELECT o.id, o.created_at, o.status, o.total_amount, o.channel, o.queue_number,
+  SELECT o.id, o.created_at, o.total_amount, o.channel, o.queue_number,
+         o.discount_amount, o.created_by,
+         CASE WHEN o.staff_meal = 1 THEN CASE o.status WHEN 'cancelled' THEN 'staff_cancelled'
+                                                      ELSE 'staff' END
+              ELSE o.status END AS status,
          o.total_amount - COALESCE((SELECT SUM(p.refund_amount) FROM payments p
                                     WHERE p.order_id = o.id AND p.status = 'refunded'), 0) AS net
   FROM orders o
@@ -188,6 +198,34 @@ struct IngredientRow {
     name: String,
     unit: String,
     used: f64,
+    staff_used: f64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct MethodRow {
+    method: String,
+    bills: i64,
+    net: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct StaffMealRow {
+    user_id: String,
+    name: String,
+    plates: i64,
+    value: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct StockCheckRow {
+    k: i64,
+    ingredient_id: String,
+    name: String,
+    unit: String,
+    recipe_use: f64,
+    restock: f64,
+    count_delta: f64,
+    counts: i64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -250,7 +288,8 @@ pub async fn report(
                  WHERE {LINE_FILTER}
                  GROUP BY option_id, i.menu_item_id ORDER BY qty DESC"
             ))?,
-            all("SELECT s.ingredient_id, g.name, g.unit, -SUM(s.delta) AS used
+            all("SELECT s.ingredient_id, g.name, g.unit, -SUM(s.delta) AS used,
+                        -COALESCE(SUM(CASE WHEN m.status = 'staff' THEN s.delta END), 0) AS staff_used
                  FROM stock_moves s JOIN m ON m.id = s.order_id
                  JOIN ingredients g ON g.id = s.ingredient_id
                  WHERE s.kind IN ('sale', 'cancel')
@@ -262,11 +301,35 @@ pub async fn report(
                          FROM order_items i WHERE i.order_id = m.id) AS lines
                  FROM m ORDER BY m.created_at DESC LIMIT {MAX_BILLS}"
             ))?,
+            all("SELECT p.method, COUNT(*) AS bills, SUM(m.net) AS net
+                 FROM m JOIN payments p ON p.order_id = m.id
+                 WHERE m.status = 'paid' AND p.status IN ('succeeded', 'manual', 'refunded')
+                 GROUP BY p.method ORDER BY net DESC".into())?,
+            all("SELECT m.created_by AS user_id, COALESCE(u.name, '?') AS name,
+                        COUNT(*) AS plates, SUM(m.discount_amount) AS value
+                 FROM m LEFT JOIN users u ON u.id = m.created_by
+                 WHERE m.status = 'staff'
+                 GROUP BY m.created_by ORDER BY plates DESC".into())?,
+            // Recipe vs real count, per Bangkok day and ingredient, over the
+            // whole date range (the bill filters do not narrow a stock count).
+            all(format!(
+                "SELECT (s.created_at + {BANGKOK_OFFSET_MS}) / {DAY_MS} AS k,
+                        s.ingredient_id, g.name, g.unit,
+                        -COALESCE(SUM(CASE WHEN s.kind IN ('sale', 'cancel') THEN s.delta END), 0) AS recipe_use,
+                        COALESCE(SUM(CASE WHEN s.kind = 'restock' THEN s.delta END), 0) AS restock,
+                        COALESCE(SUM(CASE WHEN s.kind = 'count' THEN s.delta END), 0) AS count_delta,
+                        COUNT(CASE WHEN s.kind = 'count' THEN 1 END) AS counts
+                 FROM stock_moves s JOIN ingredients g ON g.id = s.ingredient_id
+                 WHERE s.shop_id = ?1 AND s.created_at >= ?2 AND s.created_at < ?3
+                 GROUP BY k, s.ingredient_id ORDER BY k, g.name"
+            ))?,
         ])
         .await?;
-    let [summary, by_day, by_hour, menu, choices, ingredients, bills] = results
-        .try_into()
-        .map_err(|_| ApiError::Internal("report batch returned a wrong count".into()))?;
+    let [summary, by_day, by_hour, menu, choices, ingredients, bills, by_method, staff, stock_check] =
+        results
+            .try_into()
+            .map_err(|_| ApiError::Internal("report batch returned a wrong count".into()))?;
+    let round = |v: f64| (v * 10_000.0).round() / 10_000.0;
 
     let summary = summary
         .results::<Summary>()?
@@ -296,10 +359,20 @@ pub async fn report(
         "choices": choices.results::<ChoiceRow>()?,
         "ingredients": ingredients.results::<IngredientRow>()?.into_iter()
             .map(|r| json!({ "ingredient_id": r.ingredient_id, "name": r.name, "unit": r.unit,
-                             "used": (r.used * 10_000.0).round() / 10_000.0 }))
+                             "used": round(r.used), "staff_used": round(r.staff_used) }))
             .collect::<Vec<_>>(),
         "bills": bills.results::<BillRow>()?,
         "bills_capped_at": MAX_BILLS,
+        "by_method": by_method.results::<MethodRow>()?,
+        "staff_meals": staff.results::<StaffMealRow>()?,
+        // actual use on a counted day = recipe_use - count_delta (a count that
+        // finds LESS than the estimate means more went out than the recipe says).
+        "stock_check": stock_check.results::<StockCheckRow>()?.into_iter()
+            .map(|r| json!({ "day": day_label(r.k), "ingredient_id": r.ingredient_id,
+                             "name": r.name, "unit": r.unit,
+                             "recipe_use": round(r.recipe_use), "restock": round(r.restock),
+                             "count_delta": round(r.count_delta), "counts": r.counts }))
+            .collect::<Vec<_>>(),
     })))
 }
 

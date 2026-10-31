@@ -9,7 +9,8 @@
 //! - `POST /orders/{id}/items`   the customer orders more (3.13)
 //! - `POST /orders/{id}/serve`   plate is up (3.14)
 //! - `POST /orders/{id}/cancel`  void an unpaid bill, with a reason (3.15)
-//! - `POST /orders/{id}/pay`     close the bill: cash / the delivery app (3.23, 4.2)
+//! - `POST /orders/{id}/pay`     close the bill: cash / QR PromptPay (Beam mock) / the delivery app (3.23, 3.24, 4.2)
+//! - `GET  /staff/meals`         staff meals taken today vs the daily limit ([`staff_meals_today`])
 //!
 //! The client never sends prices: every line is priced server-side by
 //! [`crate::pricing`] from the menu rows of the session shop at the moment the
@@ -31,6 +32,14 @@
 //! row (3.73) and closes the bill in ONE batch, and only ever charges the
 //! server-side `orders.total_amount`. Refunding a paid bill is owner-only
 //! (3.28, later ticket), which is why `cancel` refuses a paid bill with a 409.
+//!
+//! Staff meals (สวัสดิการพนักงาน, migration 0007) are the one exception on both
+//! sides: a staff member keys their own plate as a REAL bill (priced lines,
+//! queue number, stock deduction), whose money side is closed at insert
+//! (`total_amount` 0, `staff_meal` 1, status `paid`), at most
+//! [`MAX_STAFF_MEALS_PER_DAY`] per Bangkok day. `served_at` stays NULL, so the
+//! plate stays on the kitchen queue, and the bill may be cancelled until it is
+//! served (a mistake caught before cooking).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -70,6 +79,11 @@ const MAX_CANCEL_REASON_CHARS: usize = 200;
 /// (10_000_000 satang = 100 000.00 THB). A bigger gap is a keyed-in typo, not a
 /// stack of banknotes, so it is refused (3.23).
 const MAX_CASH_OVER: i64 = 10_000_000;
+/// Staff meals (สวัสดิการพนักงาน, migration 0007) per staff member per Bangkok
+/// day. Counted inside the order INSERT itself, so two concurrent staff meals
+/// of the same person can never both take the last plate.
+const MAX_STAFF_MEALS_PER_DAY: i64 = 2;
+
 
 /// Column lists mirror `routes::owner::menu` one-to-one (the shared row
 /// structs deserialize them); local consts keep that module's SQL untouched.
@@ -82,10 +96,11 @@ const GROUP_COLUMNS: &str = "id, shop_id, menu_item_id, name, required, max_sele
      tier_pricing, sort_order, created_at, updated_at";
 const OPTION_COLUMNS: &str = "id, shop_id, option_group_id, name, price_add, sold_out, \
      sort_order, created_at, updated_at";
-/// One orders row: exactly the fields the order JSON needs.
+/// One orders row: exactly the fields the order JSON needs (`staff_meal` is
+/// INTEGER 0/1, migration 0007).
 const ORDER_COLUMNS: &str = "id, queue_number, order_type, channel, table_no, note, status, \
      total_amount, discount_amount, created_by, created_at, paid_at, cancelled_at, cancel_reason, \
-     served_at";
+     served_at, staff_meal";
 /// One order_items row: the JSON fields plus `order_id` to group lines under
 /// their bill.
 const ITEM_COLUMNS_SQL: &str = "id, order_id, menu_item_id, item_name, options_json, quantity, \
@@ -106,6 +121,9 @@ pub struct CreateOrderBody {
     pub table_no: Option<String>,
     pub note: Option<String>,
     pub items: Vec<CreateOrderItemBody>,
+    /// สวัสดิการพนักงาน: the staff member's own plate (migration 0007).
+    #[serde(default)]
+    pub staff_meal: bool,
 }
 
 /// One order line as the POS keys it: ids and quantities only, never prices.
@@ -141,7 +159,7 @@ pub struct CancelBody {
 pub struct PayBody {
     /// Client UUID (idempotent retries, 3.70).
     pub payment_id: String,
-    /// "cash" | "delivery_app" - must match the order's channel (see
+    /// "cash" | "promptpay" | "delivery_app" - must match the order's channel (see
     /// [`validate_payment_method`]).
     pub method: String,
     /// Satang handed over the counter; cash only, absent otherwise.
@@ -188,6 +206,8 @@ pub struct OrderJson {
     pub cancel_reason: Option<String>,
     /// NULL = the plates are not out yet (a paid bill can still be cooking).
     pub served_at: Option<i64>,
+    /// สวัสดิการพนักงาน: billed 0, never counted as a sale (migration 0007).
+    pub staff_meal: bool,
     pub items: Vec<OrderItemJson>,
 }
 
@@ -235,6 +255,8 @@ struct OrderRow {
     cancelled_at: Option<i64>,
     cancel_reason: Option<String>,
     served_at: Option<i64>,
+    /// INTEGER 0/1 (migration 0007).
+    staff_meal: i64,
 }
 
 /// One order_items row as D1 returns it.
@@ -510,6 +532,7 @@ fn order_json(order: OrderRow, items: Vec<OrderItemJson>) -> OrderJson {
         cancelled_at: order.cancelled_at,
         cancel_reason: order.cancel_reason,
         served_at: order.served_at,
+        staff_meal: order.staff_meal != 0,
         items,
     }
 }
@@ -800,13 +823,32 @@ pub(crate) fn clean_cancel_reason(raw: &str) -> Result<String, ApiError> {
 /// cash (PromptPay via Beam comes later), delivery bills are settled by the
 /// delivery app.
 fn validate_payment_method(channel: &str, method: &str) -> Result<(), ApiError> {
-    let expected = if channel == "counter" { "cash" } else { "delivery_app" };
-    if method == expected {
+    let ok = if channel == "counter" {
+        matches!(method, "cash" | "promptpay")
+    } else {
+        method == "delivery_app"
+    };
+    if ok {
         Ok(())
     } else {
+        let expected = if channel == "counter" { "cash or promptpay" } else { "delivery_app" };
         Err(ApiError::BadRequest(format!(
             "a {channel} order is paid with {expected}, not '{method}'"
         )))
+    }
+}
+
+/// A staff meal is one plate at the counter: channel counter (dine-in or
+/// take-away) and exactly one line of quantity 1.
+fn validate_staff_meal(channel: &str, lines: &[NewLine]) -> Result<(), ApiError> {
+    if channel != "counter" {
+        return Err(ApiError::BadRequest("a staff meal is a counter order".into()));
+    }
+    match lines {
+        [line] if line.quantity == 1 => Ok(()),
+        _ => Err(ApiError::BadRequest(
+            "a staff meal is exactly one plate (one line, quantity 1)".into(),
+        )),
     }
 }
 
@@ -863,6 +905,9 @@ pub async fn create(
     let table_no = clean_table_no(body.table_no.as_deref())?;
     let note = clean_note(body.note.as_deref())?;
     let lines = parse_lines(&body.items)?;
+    if body.staff_meal {
+        validate_staff_meal(&body.channel, &lines)?;
+    }
     let env = &state.env;
 
     // Idempotency first, before any menu read: a retry must replay even if the
@@ -895,17 +940,25 @@ pub async fn create(
 
     // The queue number is assigned INSIDE the insert: COALESCE(MAX, 0) + 1 over
     // today's (Bangkok day) rows of this shop, so concurrent orders can never
-    // share a number. The aggregate always yields exactly one row.
+    // share a number. The aggregate always yields exactly one row, so the
+    // staff-meal limit is a filter OUTSIDE it: a staff meal over today's limit
+    // inserts no bill, and every line/stock statement below (guarded by the
+    // bill existing) inserts nothing either.
     let mut statements = vec![db::db(env)?
         .prepare(
             "INSERT INTO orders
                (id, shop_id, queue_number, table_no, order_type, channel, status,
                 discount_amount, total_amount, note, created_by, shift_id,
-                created_at, updated_at)
-             SELECT ?1, ?2, COALESCE(MAX(queue_number), 0) + 1, ?3, ?4, ?5, 'preparing',
-                    0, ?6, ?7, ?8, NULL, ?9, ?9
-             FROM orders
-             WHERE shop_id = ?2 AND created_at >= ?10",
+                created_at, updated_at, staff_meal)
+             SELECT ?1, ?2, q, ?3, ?4, ?5, 'preparing',
+                    0, ?6, ?7, ?8, NULL, ?9, ?9, ?11
+             FROM (SELECT COALESCE(MAX(queue_number), 0) + 1 AS q
+                   FROM orders
+                   WHERE shop_id = ?2 AND created_at >= ?10)
+             WHERE ?11 = 0
+                OR (SELECT COUNT(*) FROM orders
+                    WHERE shop_id = ?2 AND created_by = ?8 AND staff_meal = 1
+                      AND status <> 'cancelled' AND created_at >= ?10) < ?12",
         )
         .bind(&[
             txt(&order_id),
@@ -918,19 +971,47 @@ pub async fn create(
             txt(&staff.user_id),
             int(now),
             int(day_start),
+            int(i64::from(body.staff_meal)),
+            int(MAX_STAFF_MEALS_PER_DAY),
         ])?];
 
     for line in &priced {
         statements.push(line_insert(env, &shop_id, &order_id, line, now)?);
     }
     statements.extend(stock_deduction(env, &shop_id, &order_id, &staff.user_id, &lines, now).await?);
+    if body.staff_meal {
+        // Close the money side last (the lines above need an open bill): the
+        // value moves into discount_amount, nothing is left to pay. served_at
+        // stays NULL, so the plate stays on the kitchen queue.
+        statements.push(
+            db::db(env)?
+                .prepare(
+                    "UPDATE orders
+                     SET status = 'paid', discount_amount = total_amount, total_amount = 0,
+                         closed_at = ?3, updated_at = ?3
+                     WHERE id = ?1 AND shop_id = ?2 AND staff_meal = 1 AND status = 'preparing'",
+                )
+                .bind(&[txt(&order_id), txt(&shop_id), int(now)])?,
+        );
+    }
     db::db(env)?.batch(statements).await?;
 
     // The stored queue number was computed by the INSERT above, so read the
-    // bill back (same JSON as GET /orders/{id}).
-    let order = load_order(env, &shop_id, &order_id)
-        .await?
-        .ok_or_else(|| ApiError::Internal(format!("order {order_id} vanished right after insert")))?;
+    // bill back (same JSON as GET /orders/{id}). No row = the staff-meal
+    // limit filtered the insert out.
+    let order = match load_order(env, &shop_id, &order_id).await? {
+        Some(order) => order,
+        None if body.staff_meal => {
+            return Err(ApiError::Conflict(format!(
+                "staff meal limit reached ({MAX_STAFF_MEALS_PER_DAY} per day)"
+            )))
+        }
+        None => {
+            return Err(ApiError::Internal(format!(
+                "order {order_id} vanished right after insert"
+            )))
+        }
+    };
     Ok((StatusCode::CREATED, Json(order)).into_response())
 }
 
@@ -1154,7 +1235,9 @@ pub(crate) async fn cancel_with_restock(
             "UPDATE orders
              SET status = 'cancelled', cancel_reason = ?1, cancelled_by = ?2,
                  cancelled_at = ?3, closed_at = ?3, updated_at = ?3
-             WHERE id = ?4 AND shop_id = ?5 AND status IN ('preparing', 'served')",
+             WHERE id = ?4 AND shop_id = ?5
+               AND (status IN ('preparing', 'served')
+                    OR (status = 'paid' AND staff_meal = 1 AND served_at IS NULL))",
         )
         .bind(&[txt(reason), txt(user_id), int(now), txt(order_id), txt(shop_id)])?];
     statements.extend(stock::restore_statements(env, shop_id, order_id, user_id, now)?);
@@ -1254,6 +1337,9 @@ pub async fn pay(
         return Err(ApiError::Conflict(format!("order is {}", order.status)));
     }
     validate_payment_method(&order.channel, &body.method)?;
+    // promptpay is a MOCK until Beam is wired: staff confirms the transfer by
+    // hand (confirmed_by 'manual'); real Beam = a pending charge closed by its
+    // webhook (3.24/3.82).
     let amount = order.total_amount;
     let (cash_received, cash_change) = cash_fields(&body.method, amount, body.cash_received)?;
 
@@ -1264,9 +1350,12 @@ pub async fn pay(
                 .prepare(
                     "INSERT INTO payments
                        (id, shop_id, order_id, method, amount, cash_received, cash_change,
-                        status, confirmed_by, created_by, created_at, updated_at)
+                        status, confirmed_by, confirmed_at, created_by, created_at, updated_at)
                      SELECT ?1, ?3, ?2, ?4, total_amount, ?5, ?6,
-                            'succeeded', NULL, ?7, ?8, ?8
+                            'succeeded',
+                            CASE ?4 WHEN 'promptpay' THEN 'manual' END,
+                            CASE ?4 WHEN 'promptpay' THEN ?8 END,
+                            ?7, ?8, ?8
                      FROM orders
                      WHERE id = ?2 AND shop_id = ?3 AND status IN ('preparing', 'served')
                        AND total_amount = ?9",
@@ -1305,6 +1394,30 @@ pub async fn pay(
         .await?
         .ok_or_else(|| ApiError::Internal(format!("payment {payment_id} vanished")))?;
     Ok(Json(paid_json(order, payment)))
+}
+
+/// `GET /staff/meals`: the session staff member's staff meals today (Bangkok
+/// day, cancelled ones not counted) against the daily limit.
+#[worker::send]
+pub async fn staff_meals_today(
+    State(state): State<AppState>,
+    staff: StaffAuth,
+) -> Result<Json<Value>, ApiError> {
+    let used = db::db(&state.env)?
+        .prepare(
+            "SELECT COUNT(*) AS n FROM orders
+             WHERE shop_id = ?1 AND created_by = ?2 AND staff_meal = 1
+               AND status <> 'cancelled' AND created_at >= ?3",
+        )
+        .bind(&[
+            txt(&staff.shop_id),
+            txt(&staff.user_id),
+            int(bangkok_day_start_ms(now_ms())),
+        ])?
+        .first::<i64>(Some("n"))
+        .await?
+        .unwrap_or(0);
+    Ok(Json(serde_json::json!({ "used": used, "limit": MAX_STAFF_MEALS_PER_DAY })))
 }
 
 // ---------------------------------------------------------------------------
@@ -1487,6 +1600,7 @@ mod tests {
             cancelled_at: None,
             cancel_reason: None,
             served_at: None,
+            staff_meal: 0,
         }
     }
 
@@ -1655,10 +1769,27 @@ mod tests {
     }
 
     #[test]
+    fn staff_meal_is_one_plate_at_the_counter() {
+        let plate = |id: &str, quantity| NewLine {
+            id: id.into(),
+            menu_item_id: "m".into(),
+            option_ids: Vec::new(),
+            quantity,
+            note: None,
+        };
+        assert!(validate_staff_meal("counter", &[plate("a", 1)]).is_ok());
+        assert!(bad(validate_staff_meal("grab", &[plate("a", 1)])).contains("counter"));
+        assert!(bad(validate_staff_meal("counter", &[plate("a", 2)])).contains("one plate"));
+        assert!(bad(validate_staff_meal("counter", &[plate("a", 1), plate("b", 1)])).contains("one plate"));
+        assert!(bad(validate_staff_meal("counter", &[])).contains("one plate"));
+    }
+
+    #[test]
     fn payment_method_follows_the_channel() {
         assert!(validate_payment_method("counter", "cash").is_ok());
         assert!(bad(validate_payment_method("counter", "delivery_app")).contains("cash"));
-        assert!(bad(validate_payment_method("counter", "promptpay")).contains("cash"));
+        assert!(validate_payment_method("counter", "promptpay").is_ok());
+        assert!(bad(validate_payment_method("counter", "card")).contains("promptpay"));
         for channel in ["grab", "lineman", "foodpanda"] {
             assert!(validate_payment_method(channel, "delivery_app").is_ok());
             assert!(bad(validate_payment_method(channel, "cash")).contains("delivery_app"));

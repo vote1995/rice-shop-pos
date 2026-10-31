@@ -33,6 +33,15 @@ import type {
 } from '../api'
 import { fmtBaht } from '../pos/pricing'
 import { useOwnerShop } from './shopContext'
+import StockCheck from './StockCheck'
+
+const METHOD_LABELS: Record<string, string> = {
+  cash: 'เงินสด',
+  promptpay: 'QR พร้อมเพย์',
+  delivery_app: 'แอปเดลิเวอรี่',
+  card: 'บัตร',
+  ewallet: 'e-wallet',
+}
 
 // ---------------------------------------------------------------------------
 // Labels
@@ -397,13 +406,15 @@ function buildQuery(
 function billStatusLabel(status: string): string {
   if (status === 'paid') return 'จ่ายแล้ว'
   if (status === 'cancelled') return 'ยกเลิก'
+  if (status === 'staff') return 'สวัสดิการ'
+  if (status === 'staff_cancelled') return 'ยกเลิก (สวัสดิการ)'
   return 'ยังไม่ปิด'
 }
 
 /** success / warning / danger — the dot AND the text use this tone. */
 function billStatusTone(status: string): 'ok' | 'warn' | 'bad' {
-  if (status === 'paid') return 'ok'
-  if (status === 'cancelled') return 'bad'
+  if (status === 'paid' || status === 'staff') return 'ok'
+  if (status === 'cancelled' || status === 'staff_cancelled') return 'bad'
   return 'warn'
 }
 
@@ -735,6 +746,7 @@ export default function ReportPanel() {
           <p className="muted">ไม่มีบิลในช่วงนี้</p>
         </section>
       ) : null}
+      {data !== null && !hasBills && data.stock_check.length > 0 ? <StockCheck rows={data.stock_check} /> : null}
 
       {data !== null && s !== undefined && hasBills ? (
         <>
@@ -804,6 +816,51 @@ export default function ReportPanel() {
             </section>
           </div>
 
+          {/* ---------- payment methods + staff meals ---------- */}
+          <div className="dash-cols even">
+            <section className="card dash-card">
+              <div className="dash-head">
+                <h2>วิธีชำระเงิน</h2>
+                <p className="muted small">บิลที่จ่ายแล้ว</p>
+              </div>
+              {data.by_method.length === 0 ? (
+                <p className="muted small">ไม่มีข้อมูล</p>
+              ) : (
+                <BarList
+                  rows={data.by_method.map((m) => ({
+                    key: m.method,
+                    label: METHOD_LABELS[m.method] ?? m.method,
+                    bills: m.bills,
+                    net: m.net,
+                  }))}
+                />
+              )}
+            </section>
+
+            <section className="card dash-card">
+              <div className="dash-head">
+                <h2>สวัสดิการพนักงาน</h2>
+                <p className="muted small">ไม่นับเป็นยอดขาย · วันละ 2 จาน/คน</p>
+              </div>
+              {data.staff_meals.length === 0 ? (
+                <p className="muted small">ไม่มีในช่วงนี้</p>
+              ) : (
+                <TableBox head={[{ text: 'พนักงาน' }, { text: 'จาน', num: true }, { text: 'มูลค่า ฿', num: true }]}>
+                  {data.staff_meals.map((r) => (
+                    <Row
+                      key={r.user_id}
+                      cells={[
+                        { text: r.name },
+                        { text: String(r.plates), num: true },
+                        { text: fmtBaht(r.value), num: true },
+                      ]}
+                    />
+                  ))}
+                </TableBox>
+              )}
+            </section>
+          </div>
+
           {/* ---------- table cards ---------- */}
           <section className="card dash-card">
             <div className="dash-head">
@@ -861,16 +918,22 @@ export default function ReportPanel() {
             {data.ingredients.length === 0 ? (
               <p className="muted small">ไม่มีข้อมูล</p>
             ) : (
-              <TableBox head={[{ text: 'วัตถุดิบ' }, { text: 'ใช้ไป', num: true }]}>
+              <TableBox head={[{ text: 'วัตถุดิบ' }, { text: 'ใช้ไป', num: true }, { text: 'สวัสดิการ', num: true }]}>
                 {data.ingredients.map((r) => (
                   <Row
                     key={r.ingredient_id}
-                    cells={[{ text: r.name }, { text: fmtUsed(r.used, r.unit), num: true }]}
+                    cells={[
+                      { text: r.name },
+                      { text: fmtUsed(r.used, r.unit), num: true },
+                      { text: r.staff_used > 0 ? fmtUsed(r.staff_used, r.unit) : '—', num: true },
+                    ]}
                   />
                 ))}
               </TableBox>
             )}
           </section>
+
+          <StockCheck rows={data.stock_check} />
 
           {/* ---------- bills ---------- */}
           <section className="card dash-card">

@@ -177,6 +177,8 @@ function netPayment(p: Payment): number {
 
 interface DaySummary {
   paidBills: number
+  /** สวัสดิการพนักงาน plates of the day (not in paidBills / sales). */
+  staffMeals: number
   openBills: number
   cancelledBills: number
   sales: number
@@ -188,6 +190,7 @@ interface DaySummary {
 function summarize(orders: OwnerDayOrder[]): DaySummary {
   const summary: DaySummary = {
     paidBills: 0,
+    staffMeals: 0,
     openBills: 0,
     cancelledBills: 0,
     sales: 0,
@@ -195,6 +198,11 @@ function summarize(orders: OwnerDayOrder[]): DaySummary {
     channels: CHANNELS.map((c) => ({ ...c, bills: 0, sales: 0 })),
   }
   for (const o of orders) {
+    // สวัสดิการพนักงาน: billed 0, never a sale - counted on its own line
+    if (o.staff_meal) {
+      if (o.status !== 'cancelled') summary.staffMeals += 1
+      continue
+    }
     const payments = o.payments.filter(countedPayment)
     const net = payments.reduce((s, p) => s + netPayment(p), 0)
     const refunded = payments.reduce((s, p) => s + (p.refund_amount ?? 0), 0)
@@ -484,7 +492,9 @@ export function OrdersPanel() {
           ))}
         </div>
         <p className="muted small">
-          ยอดขาย = ยอดที่ชำระแล้วหักเงินที่คืน · ค้างอยู่ {summary.openBills} บิล · เปลี่ยนวันที่ด้านบนเพื่อดูยอดย้อนหลัง
+          ยอดขาย = ยอดที่ชำระแล้วหักเงินที่คืน · ค้างอยู่ {summary.openBills} บิล
+          {summary.staffMeals > 0 ? ` · สวัสดิการพนักงาน ${summary.staffMeals} จาน (ไม่นับเป็นยอดขาย)` : ''}
+          {' '}· เปลี่ยนวันที่ด้านบนเพื่อดูยอดย้อนหลัง
         </p>
       </section>
 
@@ -586,6 +596,7 @@ function OrderCard({
       <div className="chips">
         <span className="badge">{TYPE_LABELS[order.order_type] ?? order.order_type}</span>
         <span className="badge">{CHANNEL_LABELS[order.channel] ?? order.channel}</span>
+        {order.staff_meal ? <span className="badge pending">สวัสดิการพนักงาน</span> : null}
         {order.table_no ? <span className="badge approved">โต๊ะ {order.table_no}</span> : null}
       </div>
       {order.note ? <p className="muted small">หมายเหตุบิล: {order.note}</p> : null}

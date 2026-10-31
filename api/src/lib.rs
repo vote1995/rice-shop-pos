@@ -45,6 +45,7 @@ pub fn router(env: Env) -> Router {
         .route("/auth/pin", post(routes::staff_auth::pin))
         .route("/auth/logout", post(routes::staff_auth::logout))
         .route("/staff/me", get(routes::staff_auth::me))
+        .route("/staff/meals", get(routes::orders::staff_meals_today))
         // Staff POS menu (M1-1b): the session shop's saleable menu and the
         // counter sold-out toggles (shop always from the session, never the
         // request).
@@ -68,6 +69,10 @@ pub fn router(env: Env) -> Router {
         .route("/orders/{id}/unserve", post(routes::orders::unserve))
         .route("/orders/{id}/cancel", post(routes::orders::cancel))
         .route("/orders/{id}/pay", post(routes::orders::pay))
+        // Staff stock counting (blind, FEATURES 3.40): the sheet never shows
+        // the system's estimate, so the counter has to look at the shelf.
+        .route("/stock/count-sheet", get(routes::stock_count::count_sheet))
+        .route("/stock/count", post(routes::stock_count::count))
         .route("/media/{*key}", get(routes::media::get_media))
         .route("/owner/me", get(routes::owner::me))
         .route(
