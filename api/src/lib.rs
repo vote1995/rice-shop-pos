@@ -16,6 +16,7 @@ use tower_service::Service;
 use worker::*;
 
 mod auth;
+mod beam;
 mod db;
 mod error;
 mod extract;
@@ -69,6 +70,13 @@ pub fn router(env: Env) -> Router {
         .route("/orders/{id}/unserve", post(routes::orders::unserve))
         .route("/orders/{id}/cancel", post(routes::orders::cancel))
         .route("/orders/{id}/pay", post(routes::orders::pay))
+        .route("/orders/{id}/promptpay", post(routes::promptpay::create))
+        .route(
+            "/orders/{id}/promptpay/{payment_id}",
+            get(routes::promptpay::status),
+        )
+        // Beam -> us: authenticated by X-Beam-Signature, no session.
+        .route("/beam/webhook", post(routes::promptpay::webhook))
         // Staff stock counting (blind, FEATURES 3.40): the sheet never shows
         // the system's estimate, so the counter has to look at the shelf.
         .route("/stock/count-sheet", get(routes::stock_count::count_sheet))

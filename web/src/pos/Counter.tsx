@@ -14,6 +14,7 @@ import type { MenuData, MenuItem, MenuOption, Order } from '../api'
 import { applicableGroups, bahtToSatang, fmtBaht, priceLine, validateLine } from './pricing'
 import type { Channel, GroupWithOptions } from './pricing'
 import StockCount from './StockCount'
+import BeamQr from './BeamQr'
 
 // ---------------------------------------------------------------------------
 // Constants / small helpers
@@ -1033,7 +1034,7 @@ export default function Counter({
 
   async function payOrder(
     o: Order,
-    method: 'cash' | 'delivery_app' | 'promptpay',
+    method: 'cash' | 'delivery_app',
     paymentId: string,
     cashReceived?: number,
   ) {
@@ -1275,7 +1276,12 @@ export default function Counter({
           }}
           onCash={(paymentId, satang) => void payOrder(payFor, 'cash', paymentId, satang)}
           onApp={(paymentId) => void payOrder(payFor, 'delivery_app', paymentId)}
-          onPromptpay={(paymentId) => void payOrder(payFor, 'promptpay', paymentId)}
+          onQrPaid={(r) => {
+            setPayResult(r)
+            void loadOrders()
+          }}
+          onSessionExpired={() => expiredRef.current()}
+          onRevoked={() => revokedRef.current()}
         />
       ) : null}
 
@@ -1978,35 +1984,6 @@ function CartSheet({
 // Pay sheet: one tap closes a cash bill; delivery is settled in the app
 // ---------------------------------------------------------------------------
 
-/**
- * A QR-looking placeholder until Beam is wired: a deterministic module grid
- * from the order id plus the three finder squares. It encodes nothing - the
- * staff confirms the transfer by hand ("ลูกค้าโอนแล้ว").
- */
-function MockQr({ seed }: { seed: string }) {
-  const N = 25
-  let h = 2166136261
-  for (const ch of seed) h = Math.imul(h ^ ch.charCodeAt(0), 16777619)
-  const finder = (x: number, y: number) =>
-    [[0, 0], [N - 7, 0], [0, N - 7]].some(([fx, fy]) => x >= fx && x < fx + 7 && y >= fy && y < fy + 7)
-  const cells: string[] = []
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      if (finder(x, y)) continue
-      h = Math.imul(h ^ (x * 31 + y), 16777619)
-      if ((h >>> 7) & 1) cells.push(`M${x} ${y}h1v1h-1z`)
-    }
-  }
-  const eye = (x: number, y: number) =>
-    `M${x} ${y}h7v7h-7zM${x + 1} ${y + 1}v5h5v-5zM${x + 2} ${y + 2}h3v3h-3z`
-  return (
-    <svg viewBox={`-1 -1 ${N + 2} ${N + 2}`} width="200" height="200" role="img" aria-label="QR ทดลอง">
-      <path d={cells.join('')} fill="#111" />
-      <path d={eye(0, 0) + eye(N - 7, 0) + eye(0, N - 7)} fill="#111" fillRule="evenodd" />
-    </svg>
-  )
-}
-
 function PaySheet({
   order,
   busy,
@@ -2014,7 +1991,9 @@ function PaySheet({
   onClose,
   onCash,
   onApp,
-  onPromptpay,
+  onQrPaid,
+  onSessionExpired,
+  onRevoked,
 }: {
   order: Order
   busy: boolean
@@ -2022,12 +2001,17 @@ function PaySheet({
   onClose: () => void
   onCash: (paymentId: string, cashSatang: number) => void
   onApp: (paymentId: string) => void
-  onPromptpay: (paymentId: string) => void
+  onQrPaid: (r: PayResult) => void
+  onSessionExpired: () => void
+  onRevoked: () => void
 }) {
   // one payment id per sheet open — a retry after a network error reuses it
   const [paymentId] = useState(() => crypto.randomUUID())
   const [other, setOther] = useState('')
   const [mode, setMode] = useState<'cash' | 'qr'>('cash')
+  /** Once shown, the QR stays mounted (hidden under cash): flipping back must
+   *  show the SAME charge, never create a second one. */
+  const [qrOpened, setQrOpened] = useState(false)
   const total = order.total_amount
   const counter = order.channel === 'counter'
   const otherSat = bahtToSatang(other)
@@ -2108,30 +2092,40 @@ function PaySheet({
               type="button"
               className={mode === 'qr' ? 'on' : ''}
               aria-pressed={mode === 'qr'}
-              onClick={() => setMode('qr')}
+              onClick={() => {
+                setMode('qr')
+                setQrOpened(true)
+              }}
             >
               QR พร้อมเพย์
             </button>
           </div>
         ) : null}
 
-        {counter && mode === 'qr' ? (
-          <div className="pos-qr">
-            <div className="pos-qr-box">
-              <MockQr seed={order.id} />
-            </div>
-            <span className="pos-qr-amount">{baht(total)}</span>
-            <span className="muted small">QR ทดลอง — ยังไม่เชื่อม Beam</span>
-            <button
-              type="button"
-              style={{ ...S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN), width: '100%' }}
-              disabled={busy}
-              onClick={() => onPromptpay(paymentId)}
-            >
-              ลูกค้าโอนแล้ว
-            </button>
+        {counter && qrOpened ? (
+          <div hidden={mode !== 'qr'}>
+          <BeamQr
+            order={order}
+            onPaid={(r) =>
+              onQrPaid({
+                order: r.order,
+                payment: {
+                  id: r.payment.id,
+                  method: 'promptpay',
+                  amount: r.payment.amount,
+                  cash_received: null,
+                  cash_change: null,
+                  status: r.payment.status,
+                },
+              })
+            }
+            onSessionExpired={onSessionExpired}
+            onRevoked={onRevoked}
+          />
           </div>
-        ) : counter ? (
+        ) : null}
+
+        {counter && mode === 'qr' ? null : counter ? (
           <>
             <div style={{ fontSize: 14, color: MUTED }}>ลูกค้าให้เงินมา — กดครั้งเดียวจบ</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>

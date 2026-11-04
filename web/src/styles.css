@@ -1268,6 +1268,20 @@ body:has(.pos[data-theme="dark"]) { background: #0f1012; }
 .pos .pos-qr { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 4px 0; }
 .pos .pos-qr-box { background: #fff; border-radius: 16px; padding: 12px; line-height: 0; border: 1px solid var(--border); }
 .pos .pos-qr-amount { font-size: 2rem; font-weight: 800; }
+.pos .pos-qr-box.dim { opacity: 0.25; }
+.pos .pos-qr-wait { width: 244px; height: 244px; display: grid; place-items: center; }
+.pos .pos-qr-wait-text { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; color: var(--accent); }
+.pos .pos-qr-dot {
+  width: 10px; height: 10px; border-radius: 50%; background: var(--accent);
+  animation: pos-qr-pulse 1.2s ease-in-out infinite;
+}
+@keyframes pos-qr-pulse { 50% { opacity: 0.25; transform: scale(0.7); } }
+@media (prefers-reduced-motion: reduce) { .pos .pos-qr-dot { animation: none; } }
+.pos .pos-qr-btn {
+  width: 100%; min-height: 52px; border-radius: 14px; font-size: 1.05rem; font-weight: 700;
+  background: var(--accent); color: var(--accent-contrast); border: 1px solid var(--accent);
+}
+.pos [hidden] { display: none !important; }
 
 /* ==========================================================================
    STAFF POS: stock count (นับสต็อก) — the third bottom-nav tab, the blind

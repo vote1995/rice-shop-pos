@@ -159,7 +159,7 @@ pub struct CancelBody {
 pub struct PayBody {
     /// Client UUID (idempotent retries, 3.70).
     pub payment_id: String,
-    /// "cash" | "promptpay" | "delivery_app" - must match the order's channel (see
+    /// "cash" | "delivery_app" - must match the order's channel (see
     /// [`validate_payment_method`]).
     pub method: String,
     /// Satang handed over the counter; cash only, absent otherwise.
@@ -819,19 +819,20 @@ pub(crate) fn clean_cancel_reason(raw: &str) -> Result<String, ApiError> {
     Ok(reason.to_owned())
 }
 
-/// The payment method a bill may close with (3.23, 4.2): counter bills take
-/// cash (PromptPay via Beam comes later), delivery bills are settled by the
-/// delivery app.
+/// The payment method `POST /orders/{id}/pay` may close a bill with (3.23,
+/// 4.2): counter bills take cash here (PromptPay goes through a Beam QR charge,
+/// `POST /orders/{id}/promptpay`, closed by Beam - never by hand), delivery
+/// bills are settled by the delivery app.
 fn validate_payment_method(channel: &str, method: &str) -> Result<(), ApiError> {
     let ok = if channel == "counter" {
-        matches!(method, "cash" | "promptpay")
+        method == "cash"
     } else {
         method == "delivery_app"
     };
     if ok {
         Ok(())
     } else {
-        let expected = if channel == "counter" { "cash or promptpay" } else { "delivery_app" };
+        let expected = if channel == "counter" { "cash (PromptPay: use the QR)" } else { "delivery_app" };
         Err(ApiError::BadRequest(format!(
             "a {channel} order is paid with {expected}, not '{method}'"
         )))
@@ -1337,9 +1338,6 @@ pub async fn pay(
         return Err(ApiError::Conflict(format!("order is {}", order.status)));
     }
     validate_payment_method(&order.channel, &body.method)?;
-    // promptpay is a MOCK until Beam is wired: staff confirms the transfer by
-    // hand (confirmed_by 'manual'); real Beam = a pending charge closed by its
-    // webhook (3.24/3.82).
     let amount = order.total_amount;
     let (cash_received, cash_change) = cash_fields(&body.method, amount, body.cash_received)?;
 
@@ -1353,8 +1351,8 @@ pub async fn pay(
                         status, confirmed_by, confirmed_at, created_by, created_at, updated_at)
                      SELECT ?1, ?3, ?2, ?4, total_amount, ?5, ?6,
                             'succeeded',
-                            CASE ?4 WHEN 'promptpay' THEN 'manual' END,
-                            CASE ?4 WHEN 'promptpay' THEN ?8 END,
+                            NULL,
+                            NULL,
                             ?7, ?8, ?8
                      FROM orders
                      WHERE id = ?2 AND shop_id = ?3 AND status IN ('preparing', 'served')
@@ -1788,8 +1786,8 @@ mod tests {
     fn payment_method_follows_the_channel() {
         assert!(validate_payment_method("counter", "cash").is_ok());
         assert!(bad(validate_payment_method("counter", "delivery_app")).contains("cash"));
-        assert!(validate_payment_method("counter", "promptpay").is_ok());
-        assert!(bad(validate_payment_method("counter", "card")).contains("promptpay"));
+        assert!(bad(validate_payment_method("counter", "promptpay")).contains("QR"));
+        assert!(bad(validate_payment_method("counter", "card")).contains("cash"));
         for channel in ["grab", "lineman", "foodpanda"] {
             assert!(validate_payment_method(channel, "delivery_app").is_ok());
             assert!(bad(validate_payment_method(channel, "cash")).contains("delivery_app"));
