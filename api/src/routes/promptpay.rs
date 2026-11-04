@@ -404,3 +404,61 @@ pub async fn webhook(
     }
     Ok(StatusCode::OK)
 }
+
+/// Look-back cap of `GET /payments/recent`: a counter that was asleep does
+/// not replay an hour of "ได้รับเงิน" when it wakes up.
+const RECENT_WINDOW_MS: i64 = 10 * 60 * 1000;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RecentPayment {
+    pub id: String,
+    pub amount: i64,
+    pub queue_number: i64,
+    pub confirmed_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RecentJson {
+    pub payments: Vec<RecentPayment>,
+    /// Next `since`.
+    pub cursor: i64,
+}
+
+/// `GET /payments/recent?since=ms` (staff): PromptPay payments of this shop
+/// that Beam confirmed after `since` — what the counter's "เงินเข้า"
+/// announcement speaks. Read-only; confirming stays with the webhook and the
+/// pay sheet's status check.
+#[worker::send]
+pub async fn recent(
+    State(state): State<AppState>,
+    staff: StaffAuth,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> Result<Json<RecentJson>, ApiError> {
+    let now = now_ms();
+    // `since`: confirmed_at of the last payment already announced; absent =
+    // first call, nothing returned, only the cursor to start from.
+    let since = query
+        .as_deref()
+        .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("since=")))
+        .map(|v| v.parse::<i64>().map_err(|_| ApiError::BadRequest("since must be ms".into())))
+        .transpose()?;
+    let Some(since) = since else {
+        return Ok(Json(RecentJson { payments: vec![], cursor: now }));
+    };
+    let from = since.max(now - RECENT_WINDOW_MS);
+    let payments = db::db(&state.env)?
+        .prepare(
+            "SELECT p.id, p.amount, o.queue_number, p.confirmed_at
+             FROM payments p JOIN orders o ON o.id = p.order_id
+             WHERE p.shop_id = ?1 AND p.method = 'promptpay'
+               AND p.status IN ('succeeded', 'refunded') AND p.confirmed_at > ?2
+             ORDER BY p.confirmed_at, p.id
+             LIMIT 20",
+        )
+        .bind(&[txt(&staff.shop_id), int(from)])?
+        .all()
+        .await?
+        .results::<RecentPayment>()?;
+    let cursor = payments.last().map(|p| p.confirmed_at).unwrap_or(since.max(from));
+    Ok(Json(RecentJson { payments, cursor }))
+}

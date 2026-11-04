@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
+import PayAnnouncer from './PayAnnouncer'
 import {
   api,
   clearDevice,
@@ -610,6 +611,7 @@ export default function PosApp() {
           <span className="brand">POS ร้านข้าว</span>
           {shopName ? <span className="muted">ร้าน {shopName} · {me.name}</span> : <span className="muted">{me.name}</span>}
           <span className="bar-actions">
+            <PayAnnouncer />
             <button
               type="button"
               className="bar-btn pos-theme-btn"

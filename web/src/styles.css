@@ -940,6 +940,22 @@ body:has(.pos[data-theme="dark"]) { background: #0f1012; }
   width: 44px; min-width: 44px; min-height: 44px; padding: 0;
   display: grid; place-items: center; color: var(--muted);
 }
+.pos .pos-announce-btn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.pos .pos-announce-btn.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+@media (max-width: 520px) {
+  .pos .bar { padding-left: 10px; padding-right: 10px; gap: 6px; }
+  .pos .bar-actions { gap: 4px; }
+  .pos .bar-btn { padding: 4px 8px; }
+  .pos .pos-theme-btn { width: 40px; min-width: 40px; padding: 0; }
+  .pos .pos-announce-btn { width: 40px; min-width: 40px; padding: 0; justify-content: center; }
+  .pos .pos-announce-label { display: none; }
+}
+@media (max-width: 380px) {
+  .pos .bar .muted { display: none; }
+  .pos .bar .brand { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 0.95rem; }
+  .pos .bar-btn { padding: 4px 6px; font-size: 0.8rem; }
+  .pos .pos-theme-btn, .pos .pos-announce-btn { width: 38px; min-width: 38px; padding: 0; }
+}
 
 /* ---- selling screen frame: one column on a phone, builder + order on wide ---- */
 .pos .pos-content {

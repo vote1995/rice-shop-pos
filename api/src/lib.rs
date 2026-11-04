@@ -77,6 +77,7 @@ pub fn router(env: Env) -> Router {
         )
         // Beam -> us: authenticated by X-Beam-Signature, no session.
         .route("/beam/webhook", post(routes::promptpay::webhook))
+        .route("/payments/recent", get(routes::promptpay::recent))
         // Staff stock counting (blind, FEATURES 3.40): the sheet never shows
         // the system's estimate, so the counter has to look at the shelf.
         .route("/stock/count-sheet", get(routes::stock_count::count_sheet))

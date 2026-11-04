@@ -15,6 +15,7 @@ import { applicableGroups, bahtToSatang, fmtBaht, priceLine, validateLine } from
 import type { Channel, GroupWithOptions } from './pricing'
 import StockCount from './StockCount'
 import BeamQr from './BeamQr'
+import { announcePaid } from './announce'
 
 // ---------------------------------------------------------------------------
 // Constants / small helpers
@@ -1277,6 +1278,7 @@ export default function Counter({
           onCash={(paymentId, satang) => void payOrder(payFor, 'cash', paymentId, satang)}
           onApp={(paymentId) => void payOrder(payFor, 'delivery_app', paymentId)}
           onQrPaid={(r) => {
+            announcePaid(r.payment.id, r.payment.amount, r.order.queue_number)
             setPayResult(r)
             void loadOrders()
           }}
