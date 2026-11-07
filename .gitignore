@@ -17,3 +17,7 @@ dist/
 
 # Scratch
 .tmp/
+
+# Slip reader agent local config
+tools/slip-agent/.env
+tools/slip-agent/agent.log

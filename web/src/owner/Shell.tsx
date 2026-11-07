@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useOwnerShop } from './shopContext'
 
-export type OwnerPage = 'report' | 'orders' | 'menu' | 'stock' | 'staff' | 'devices' | 'shops'
+export type OwnerPage = 'report' | 'orders' | 'menu' | 'stock' | 'slips' | 'staff' | 'devices' | 'shops'
 export type ThemeChoice = 'light' | 'dark' | 'system'
 
 /** localStorage keys of the shell preferences. */
@@ -28,6 +28,7 @@ export const PAGE_TITLES: Record<OwnerPage, string> = {
   orders: 'บิลรายวัน',
   menu: 'เมนู',
   stock: 'สต็อก',
+  slips: 'สลิปซื้อของ',
   staff: 'พนักงาน',
   devices: 'เครื่อง',
   shops: 'ร้าน',
@@ -46,6 +47,7 @@ const NAV: Array<{ label: string; items: Array<{ id: OwnerPage; icon: IconName }
     items: [
       { id: 'menu', icon: 'bowl' },
       { id: 'stock', icon: 'box' },
+      { id: 'slips', icon: 'slip' },
     ],
   },
   {
@@ -73,6 +75,7 @@ type IconName =
   | 'receipt'
   | 'bowl'
   | 'box'
+  | 'slip'
   | 'users'
   | 'device'
   | 'store'
@@ -112,6 +115,14 @@ const ICONS: Record<IconName, ReactNode> = {
       <path d="M3.5 8 12 4l8.5 4v8L12 20l-8.5-4z" />
       <path d="M3.5 8 12 12l8.5-4" />
       <path d="M12 12v8" />
+    </>
+  ),
+  slip: (
+    <>
+      <path d="M6.5 3h11v18h-11z" />
+      <path d="M9.5 8h5" />
+      <path d="M9.5 12h5" />
+      <path d="M9.5 16h3" />
     </>
   ),
   users: (

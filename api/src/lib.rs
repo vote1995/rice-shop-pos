@@ -22,6 +22,7 @@ mod error;
 mod extract;
 mod media;
 mod pricing;
+mod slips;
 mod routes;
 mod stock;
 mod util;
@@ -144,6 +145,31 @@ pub fn router(env: Env) -> Router {
         )
         .route("/owner/staff/{id}/reset-pin", post(routes::owner::staff::reset_pin))
         .route("/owner/staff/{id}/revoke", post(routes::owner::staff::revoke))
+        // Purchase-receipt reader (phase 1): upload + reader gateway, see crate::slips.
+        .route(
+            "/owner/slips",
+            get(routes::owner::slips::list).post(routes::owner::slips::create),
+        )
+        .route(
+            "/owner/slips/{id}",
+            get(routes::owner::slips::get_slip).delete(routes::owner::slips::delete),
+        )
+        .route("/owner/slips/{id}/submit", post(routes::owner::slips::submit))
+        .route(
+            "/owner/slips/{id}/pages/{page}",
+            get(routes::owner::slips::get_page).put(routes::owner::slips::put_page),
+        )
+        // The local reader agent (owner's PC); shared-secret auth, not Access.
+        .route("/slip-agent/heartbeat", post(routes::slip_agent::heartbeat))
+        .route("/slip-agent/claim", post(routes::slip_agent::claim))
+        .route(
+            "/slip-agent/slips/{id}/pages/{page}",
+            get(routes::slip_agent::page),
+        )
+        .route(
+            "/slip-agent/slips/{id}/result",
+            post(routes::slip_agent::result),
+        )
         .route("/owner/devices", get(routes::owner::devices::list))
         .route(
             "/owner/devices/{id}/approve",
@@ -171,4 +197,13 @@ async fn fetch(
     _ctx: Context,
 ) -> Result<axum::http::Response<axum::body::Body>> {
     Ok(router(env).call(req).await?)
+}
+
+/// Cron (wrangler.toml `[triggers]`, every minute): slip queue sweep —
+/// expired reader leases back to the queue, cloud fallback while the PC is off.
+#[event(scheduled)]
+async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
+    if let Err(e) = slips::sweep(&env).await {
+        console_error!("slip sweep failed: {e:?}");
+    }
 }

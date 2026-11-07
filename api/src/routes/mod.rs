@@ -8,6 +8,7 @@ pub mod menu;
 pub mod orders;
 pub mod owner;
 pub mod promptpay;
+pub mod slip_agent;
 pub mod staff_auth;
 pub mod stock_count;
 

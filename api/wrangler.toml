@@ -30,12 +30,23 @@ migrations_dir = "migrations"
 binding = "MEDIA"
 bucket_name = "rice-pos-media"
 
+# Workers AI — the CLOUD slip reader (fallback when the owner's PC agent is
+# offline). The app caps itself below the free tier's 10,000 neurons/day: see
+# api/src/slips/mod.rs (ai_usage bookkeeping, migration 0009).
+[ai]
+binding = "AI"
+
 # Cloudflare Access (owner auth) — filled in a later ticket (M0).
 # ACCESS_TEAM_DOMAIN: Zero Trust team domain (JWKS + iss), e.g. "<team>.cloudflareaccess.com"
 # ACCESS_AUD:         Access application AUD claim
 [vars]
 ACCESS_TEAM_DOMAIN = "vbo.cloudflareaccess.com"
 ACCESS_AUD = "85f5affb5b3c7bb44173c89f678199e7f5c24b935a34fd91b18d085172b69932"
+
+# Slip queue sweep: return expired local-reader leases to the queue and pick
+# queued slips up for the cloud reader (api/src/slips/, phase 1).
+[triggers]
+crons = ["* * * * *"]
 
 # SPA (web/dist) + API in one Worker. Only /api/* runs the Worker first; every
 # other path is a static asset, unknown paths fall back to index.html.

@@ -130,6 +130,56 @@ export function getMediaUsage(): Promise<MediaUsage> {
   return api<MediaUsage>('GET', '/api/owner/media-usage')
 }
 
+// ---- owner slips (slip reader phase 1): upload photos -> AI reads them ----
+
+/** GET /api/owner/slips?shop_id=… — the reader state + the 50 newest slips. */
+export function listSlips(shopId: string): Promise<SlipsData> {
+  return api<SlipsData>('GET', `/api/owner/slips?shop_id=${encodeURIComponent(shopId)}`)
+}
+
+/** POST /api/owner/slips `{id, shop_id}` -> a draft row (idempotent on id). */
+export function createSlip(id: string, shopId: string): Promise<Slip> {
+  return api<Slip>('POST', '/api/owner/slips', { id, shop_id: shopId })
+}
+
+/** PUT /api/owner/slips/{id}/pages/{page} — body is the raw JPEG bytes. */
+export function uploadSlipPage(id: string, page: number, blob: Blob): Promise<Slip> {
+  return apiBinary<Slip>('PUT', `/api/owner/slips/${encodeURIComponent(id)}/pages/${page}`, blob, 'image/jpeg')
+}
+
+/** POST /api/owner/slips/{id}/submit — the cloud read may run IN this request (10-60 s). */
+export function submitSlip(id: string): Promise<Slip> {
+  return api<Slip>('POST', `/api/owner/slips/${encodeURIComponent(id)}/submit`)
+}
+
+/** GET /api/owner/slips/{id} — one slip with its parsed result. */
+export function getSlip(id: string): Promise<Slip> {
+  return api<Slip>('GET', `/api/owner/slips/${encodeURIComponent(id)}`)
+}
+
+/** DELETE /api/owner/slips/{id} -> 204 No Content (refused while 'reading'). */
+export async function deleteSlip(id: string): Promise<void> {
+  await api<void>('DELETE', `/api/owner/slips/${encodeURIComponent(id)}`)
+}
+
+/**
+ * GET /api/owner/slips/{id}/pages/{n} as a blob: URL for an <img>. The pages
+ * are private, so this is a plain fetch (same-origin = the Access cookie) +
+ * an object URL, never a bare URL the browser would load unauthenticated.
+ */
+export async function slipPageUrl(id: string, page: number): Promise<string> {
+  let res: Response
+  try {
+    res = await fetch(`/api/owner/slips/${encodeURIComponent(id)}/pages/${page}`)
+  } catch {
+    throw new ApiError(0, 'network', 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้')
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, `http_${res.status}`, `HTTP ${res.status}`)
+  }
+  return URL.createObjectURL(await res.blob())
+}
+
 /** Transient problems (network / upstream) are always just "retry" — never "logged out". */
 export function friendlyError(e: unknown): string {
   if (!(e instanceof ApiError)) return 'ลองใหม่อีกครั้ง'
@@ -622,4 +672,66 @@ export interface ReportData {
   staff_meals: ReportStaffMealRow[]
   /** NOT narrowed by the bill filters: the whole date range. */
   stock_check: ReportStockCheckRow[]
+}
+
+// ---- owner slips (slip reader phase 1) ----
+// Money here is PLAIN BAHT as the reader reports it (not satang like menus),
+// times are unix ms like the rest of the owner API.
+
+export type SlipStatus = 'draft' | 'queued' | 'reading' | 'read' | 'failed'
+
+/** Who is reading / did read the slip: the PC agent or Workers AI. */
+export type SlipReader = 'local' | 'cloud'
+
+/** One purchased item the reader extracted from the photos. */
+export interface SlipLine {
+  code: string | null
+  name: string
+  qty: number | null
+  unit: string | null
+  unit_price: number | null
+  total: number | null
+}
+
+/** The reader's normalised output (validated server-side before it is stored). */
+export interface SlipResult {
+  store: string | null
+  /** "YYYY-MM-DD" (CE) or null when unreadable */
+  date: string | null
+  receipt_no: string | null
+  lines: SlipLine[]
+  discount: number | null
+  grand_total: number | null
+}
+
+/** GET /api/owner/slips/{id} — the row with its parsed result. */
+export interface Slip {
+  id: string
+  shop_id: string
+  status: SlipStatus
+  reader: SlipReader | null
+  page_count: number
+  attempts: number
+  error: string | null
+  result: SlipResult | null
+  submitted_at: number | null
+  read_at: number | null
+  created_at: number
+}
+
+/** Reader gateway state: is the PC agent up, and is there cloud budget left? */
+export interface SlipReaderState {
+  local_online: boolean
+  local_seen_at: number | null
+  cloud_neurons_today: number
+  cloud_cap: number
+  cloud_available: boolean
+  /** slips of this shop waiting in 'queued' */
+  waiting_count: number
+}
+
+/** GET /api/owner/slips?shop_id=… */
+export interface SlipsData {
+  reader: SlipReaderState
+  slips: Slip[]
 }

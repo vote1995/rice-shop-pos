@@ -4,6 +4,7 @@ import { ApiError, api, friendlyError } from '../api'
 import type { OwnerDevice, OwnerMe, OwnerStaff } from '../api'
 import MenuEditor from './MenuEditor'
 import StockPanel from './StockPanel'
+import SlipsPanel from './SlipsPanel'
 import OrdersPanel from './OrdersPanel'
 import ReportPanel from './ReportPanel'
 import { Shell, useOwnerTheme } from './Shell'
@@ -86,6 +87,7 @@ export default function OwnerApp() {
         {page === 'orders' ? <OrdersPanel /> : null}
         {page === 'menu' ? <MenuEditor /> : null}
         {page === 'stock' ? <StockPanel /> : null}
+        {page === 'slips' ? <SlipsPanel /> : null}
         {page === 'staff' ? <StaffPanel /> : null}
         {page === 'devices' ? <DevicesPanel /> : null}
         {page === 'shops' ? <ShopsPanel /> : null}

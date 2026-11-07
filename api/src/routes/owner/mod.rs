@@ -22,6 +22,7 @@ pub mod menu;
 pub mod orders;
 pub mod report;
 pub mod shops;
+pub mod slips;
 pub mod staff;
 pub mod stock;
 
