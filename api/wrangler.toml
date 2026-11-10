@@ -96,6 +96,9 @@ bucket_name = "rice-pos-media-dev"
 [env.dev.vars]
 ACCESS_TEAM_DOMAIN = "vbo.cloudflareaccess.com"
 ACCESS_AUD = ""
+# Fake Beam (api/src/beam.rs): dev has no Beam account. Never set this in
+# production — the code refuses to run if a real BEAM_API_KEY is also present.
+BEAM_MOCK = "1"
 
 [env.dev.triggers]
 crons = []

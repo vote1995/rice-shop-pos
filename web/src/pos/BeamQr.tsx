@@ -27,6 +27,8 @@ export interface QrResult {
 }
 
 const POLL_MS = 3000
+/** Same prefix as MOCK_PREFIX in api/src/beam.rs: the dev-only fake Beam. */
+const MOCK_PREFIX = 'MOCK-DEV'
 
 function fmtBaht(satang: number): string {
   return `฿${(satang / 100).toLocaleString('th-TH', { maximumFractionDigits: 2 })}`
@@ -212,6 +214,11 @@ export default function BeamQr({
 
   return (
     <div className="pos-qr">
+      {qr.qr_raw.startsWith(MOCK_PREFIX) && (
+        <span className="error small" role="note">
+          โหมดทดสอบ (mock) — ไม่ใช่ QR จริง ระบบจะ "จ่ายสำเร็จ" เองประมาณ 12 วินาที
+        </span>
+      )}
       <div className={`pos-qr-box${timedOut || refused ? ' dim' : ''}`}>
         <QrSvg data={qr.qr_raw} />
       </div>

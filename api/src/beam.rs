@@ -22,8 +22,64 @@ use sha2::Sha256;
 use wasm_bindgen::JsValue;
 use worker::{Env, Fetch, Headers, Method, Request, RequestInit};
 
+use crate::util::now_ms;
+
 /// Production API. Pinned: never taken from a request or a var.
 const BEAM_BASE_URL: &str = "https://api.beamcheckout.com";
+
+// ---------------------------------------------------------------------------
+// Dev-only fake Beam.
+//
+// `BEAM_MOCK=1` (a plain var, set ONLY under [env.dev.vars] in wrangler.toml)
+// replaces every call to Beam with a local fake, so dev needs no Beam account.
+// - create: returns a QR payload "MOCK-DEV ..." that is NOT a PromptPay EMV
+//   string, so no banking app can pay it.
+// - status: the charge reads PENDING for MOCK_PAID_AFTER_MS, then SUCCEEDED, so
+//   the status poll in the PWA settles the bill the way a real payment would.
+// Fails closed: if a real BEAM_API_KEY is configured too, the mock refuses to
+// run (that combination means it was switched on in the wrong environment).
+// ---------------------------------------------------------------------------
+/// The PWA shows a "test mode" banner for QR payloads starting with this.
+pub const MOCK_PREFIX: &str = "MOCK-DEV";
+const MOCK_PAID_AFTER_MS: i64 = 12_000;
+const MOCK_MERCHANT_ID: &str = "mock-merchant";
+
+fn mock_mode(env: &Env) -> Result<bool, BeamError> {
+    let on = env
+        .var("BEAM_MOCK")
+        .map(|v| v.to_string().trim() == "1")
+        .unwrap_or(false);
+    if on && secret(env, "BEAM_API_KEY").is_ok() {
+        return Err(BeamError::Config(
+            "BEAM_MOCK=1 refused: a real BEAM_API_KEY is also configured".into(),
+        ));
+    }
+    Ok(on)
+}
+
+fn mock_charge_id(now_ms: i64, amount_satang: i64) -> String {
+    format!("mock_{now_ms}_{amount_satang}")
+}
+
+/// `mock_<created ms>_<amount satang>` -> (created ms, amount).
+fn mock_parse(charge_id: &str) -> Option<(i64, i64)> {
+    let rest = charge_id.strip_prefix("mock_")?;
+    let (ms, amount) = rest.split_once('_')?;
+    Some((ms.parse().ok()?, amount.parse().ok()?))
+}
+
+fn mock_charge(charge_id: &str, now_ms: i64) -> Option<Charge> {
+    let (created, amount) = mock_parse(charge_id)?;
+    let paid = now_ms.saturating_sub(created) >= MOCK_PAID_AFTER_MS;
+    Some(Charge {
+        charge_id: charge_id.to_string(),
+        merchant_id: Some(MOCK_MERCHANT_ID.to_string()),
+        reference_id: None,
+        status: (if paid { "SUCCEEDED" } else { "PENDING" }).to_string(),
+        currency: Some("THB".to_string()),
+        amount: Some(amount),
+    })
+}
 
 #[derive(Debug)]
 pub enum BeamError {
@@ -91,6 +147,9 @@ fn secret(env: &Env, name: &str) -> Result<String, BeamError> {
 
 /// The merchant id this deployment is configured for.
 pub fn merchant_id(env: &Env) -> Result<String, BeamError> {
+    if mock_mode(env)? {
+        return Ok(MOCK_MERCHANT_ID.to_string());
+    }
     secret(env, "BEAM_MERCHANT_ID")
 }
 
@@ -165,6 +224,15 @@ pub async fn create_qr_charge(
     amount_satang: i64,
     reference_id: &str,
 ) -> Result<QrCharge, BeamError> {
+    if mock_mode(env)? {
+        return Ok(QrCharge {
+            charge_id: mock_charge_id(now_ms(), amount_satang),
+            qr_raw: format!(
+                "{MOCK_PREFIX} NOT-A-REAL-PAYMENT ref={reference_id} amount={amount_satang}"
+            ),
+            expiry: None,
+        });
+    }
     let body = json!({
         "amount": amount_satang,
         "currency": "THB",
@@ -203,6 +271,10 @@ pub async fn get_charge(env: &Env, charge_id: &str) -> Result<Charge, BeamError>
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
         return Err(BeamError::Config(format!("bad charge id {charge_id:?}")));
+    }
+    if mock_mode(env)? {
+        return mock_charge(charge_id, now_ms())
+            .ok_or_else(|| BeamError::Rejected(format!("unknown mock charge {charge_id}")));
     }
     let text = call(
         env,
@@ -287,5 +359,36 @@ mod tests {
             classify(401, "/x", String::new()),
             Err(BeamError::Rejected(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod mock_tests {
+    use super::*;
+
+    #[test]
+    fn mock_charge_is_pending_then_succeeds() {
+        let id = mock_charge_id(1_000_000, 15_000);
+        let early = mock_charge(&id, 1_000_000 + MOCK_PAID_AFTER_MS - 1).unwrap();
+        assert_eq!(early.status, "PENDING");
+        let late = mock_charge(&id, 1_000_000 + MOCK_PAID_AFTER_MS).unwrap();
+        assert_eq!(late.status, "SUCCEEDED");
+        // the app only settles when currency is THB and the amount matches
+        assert_eq!(late.currency.as_deref(), Some("THB"));
+        assert_eq!(late.amount, Some(15_000));
+    }
+
+    #[test]
+    fn mock_ids_round_trip_and_reject_garbage() {
+        assert_eq!(mock_parse(&mock_charge_id(42, 7)), Some((42, 7)));
+        for bad in ["", "mock_", "mock_1", "mock_a_b", "ch_30GtUweMWec7r2hHIsV5xxQeJKp", "mock_1_2_3"] {
+            assert!(mock_charge(bad, 0).is_none(), "{bad:?} must not parse");
+        }
+    }
+
+    #[test]
+    fn mock_payload_is_not_a_promptpay_emv_string() {
+        // real PromptPay QR payloads start with the EMV format indicator "000201"
+        assert!(!MOCK_PREFIX.starts_with("000201"));
     }
 }
