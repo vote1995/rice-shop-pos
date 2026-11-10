@@ -1,0 +1,60 @@
+# Deploy to the DEV environment on every push to main (after CI passes).
+# Production is NOT touched here: it is deployed only from a v* tag (deploy.yml).
+#
+# dev = Worker `rice-pos-api-dev`, D1 `rice-pos-dev`, R2 `rice-pos-media-dev`,
+# host pos-dev.twostackmaxgame.win — see [env.dev] in api/wrangler.toml.
+#
+# Required secrets (same ones production uses): CLOUDFLARE_API_TOKEN
+# (Workers Scripts:Edit, D1:Edit, Workers Routes:Edit, Zone:Read),
+# CLOUDFLARE_ACCOUNT_ID. Worker secrets for dev (PIN_PEPPER, SLIP_AGENT_TOKEN,
+# BEAM_* test keys) are set once with `wrangler secret put <NAME> --env dev`.
+name: deploy-dev
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: true   # in dev the newest push wins
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: dev
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: api
+          cache-bin: true
+      - name: install worker-build
+        run: command -v worker-build || cargo install worker-build --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: build web (served as Worker static assets)
+        working-directory: web
+        run: npm ci && npm run build
+      - name: migrate D1 (dev, remote)
+        working-directory: api
+        run: npx --yes wrangler@4 d1 migrations apply rice-pos-dev --remote --env dev
+      - name: deploy Worker (dev)
+        working-directory: api
+        run: npx --yes wrangler@4 deploy --env dev

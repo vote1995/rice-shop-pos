@@ -1,11 +1,10 @@
-# CI: runs on every push to main and every pull request (including forks).
-# Read-only token, no secrets. Also reusable by deploy.yml via workflow_call
-# so a release tag is re-checked before anything is deployed.
+# CI: runs on every pull request (including forks). Read-only token, no secrets.
+# It is also called (workflow_call) by deploy-dev.yml on every push to main and by
+# deploy.yml on a release tag, so nothing is deployed without passing it — and a
+# push to main does not run it twice.
 name: ci
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_call:
 

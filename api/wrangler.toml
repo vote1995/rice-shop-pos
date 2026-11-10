@@ -54,3 +54,53 @@ crons = ["* * * * *"]
 directory = "../web/dist"
 not_found_handling = "single-page-application"
 run_worker_first = ["/api/*"]
+
+# ---------------------------------------------------------------------------
+# dev environment — `wrangler deploy --env dev` (CI does this on every push to
+# main; production is deployed only from a v* tag, see .github/workflows).
+#
+# Wrangler does NOT inherit bindings or vars into an environment, so everything
+# the Worker needs is declared again here. Dev has its own D1 and R2 and none of
+# production's data.
+#
+# One hostname only: the web app serves owner mode at /owner when the host does
+# not start with "owner." (see web/src/main.tsx), so no second host is needed.
+# No AI binding and no cron in dev — both would spend the account-wide free
+# quota that production relies on (the cloud slip reader simply stays off).
+# ---------------------------------------------------------------------------
+[env.dev]
+name = "rice-pos-api-dev"
+workers_dev = false
+preview_urls = false
+routes = [
+  { pattern = "pos-dev.twostackmaxgame.win", custom_domain = true },
+]
+
+[env.dev.build]
+command = "worker-build --release"
+
+[[env.dev.d1_databases]]
+binding = "DB"
+database_name = "rice-pos-dev"
+database_id = "5cbfdf39-503a-4c7b-8d53-fa6cf58bd709"
+migrations_dir = "migrations"
+
+[[env.dev.r2_buckets]]
+binding = "MEDIA"
+bucket_name = "rice-pos-media-dev"
+
+# Owner auth in dev: create a Cloudflare Access application covering
+# pos-dev.twostackmaxgame.win/owner* and /api/owner*, then put its AUD below.
+# Until then ACCESS_AUD is empty and the owner routes refuse to work. Never set
+# DEV_OWNER_EMAIL on this public hostname (it would bypass Access).
+[env.dev.vars]
+ACCESS_TEAM_DOMAIN = "vbo.cloudflareaccess.com"
+ACCESS_AUD = ""
+
+[env.dev.triggers]
+crons = []
+
+[env.dev.assets]
+directory = "../web/dist"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]

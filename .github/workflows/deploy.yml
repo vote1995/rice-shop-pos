@@ -1,5 +1,7 @@
-# Deploy: runs ONLY when a release tag is pushed (v1.2.3). Pushing to main or
-# opening a PR never deploys (see ci.yml).
+# Deploy to PRODUCTION: runs ONLY when a release tag is pushed (v1.2.3).
+# Pushing to main deploys to the dev environment instead (deploy-dev.yml) and
+# opening a PR never deploys (ci.yml). No --env flag here = the top-level
+# (production) Worker/D1/R2 in api/wrangler.toml.
 #
 # Release:  git tag v1.2.3 && git push origin v1.2.3
 #

@@ -119,10 +119,16 @@ MIT — see [LICENSE](LICENSE).
 
 ## Release / deploy
 
-CI runs on every push to `main` and every PR. Deploy runs only for a release tag on `main`:
+| Event | What runs | Target |
+|---|---|---|
+| pull request | CI (clippy, tests, web build) | nothing is deployed |
+| push to `main` | CI, then deploy | **dev** (`pos-dev.twostackmaxgame.win`, own D1 + R2) |
+| push a `v*` tag on `main` | CI, then deploy | **production** |
 
 ```bash
-git tag v1.2.3 && git push origin v1.2.3
+git tag v1.2.3 && git push origin v1.2.3   # production
 ```
 
-See `.github/workflows/deploy.yml` for the guards and required secrets.
+Dev is a separate Worker (`rice-pos-api-dev`) with its own database and bucket, defined as
+`[env.dev]` in `api/wrangler.toml`. Owner mode in dev is at `/owner`. Details and required
+secrets: `.github/workflows/deploy-dev.yml` and `deploy.yml`.
