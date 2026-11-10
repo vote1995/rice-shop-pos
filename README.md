@@ -112,3 +112,17 @@ npm run build    # tsc -b + vite build → web/dist ซึ่ง Worker ใน a
 พฤติกรรมหลักฝั่ง POS: ลงทะเบียนเครื่อง → รอเจ้าของอนุมัติ (poll `/api/device/status`
 ทุก 5 วินาที) → เลือกพนักงาน → PIN → หน้าหลัก (session token เก็บใน sessionStorage เท่านั้น,
 auto-lock เมื่อไม่มีการใช้งาน 5 นาที, เครื่องถูกเพิกถอน = ลบข้อมูลในเครื่องทั้งหมดทันที)
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+## Release / deploy
+
+CI runs on every push to `main` and every PR. Deploy runs only for a release tag on `main`:
+
+```bash
+git tag v1.2.3 && git push origin v1.2.3
+```
+
+See `.github/workflows/deploy.yml` for the guards and required secrets.

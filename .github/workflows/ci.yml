@@ -1,0 +1,45 @@
+# CI: runs on every push to main and every pull request (including forks).
+# Read-only token, no secrets. Also reusable by deploy.yml via workflow_call
+# so a release tag is re-checked before anything is deployed.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: api
+      - name: clippy (wasm)
+        working-directory: api
+        run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
+      - name: unit tests (host)
+        working-directory: api
+        run: cargo test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: web build (typecheck + bundle)
+        working-directory: web
+        run: npm ci && npm run build
