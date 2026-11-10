@@ -91,11 +91,11 @@ bucket_name = "rice-pos-media-dev"
 
 # Owner auth in dev: create a Cloudflare Access application covering
 # pos-dev.twostackmaxgame.win/owner* and /api/owner*, then put its AUD below.
-# Until then ACCESS_AUD is empty and the owner routes refuse to work. Never set
+# The AUD below belongs to that dev Access app. Never set
 # DEV_OWNER_EMAIL on this public hostname (it would bypass Access).
 [env.dev.vars]
 ACCESS_TEAM_DOMAIN = "vbo.cloudflareaccess.com"
-ACCESS_AUD = ""
+ACCESS_AUD = "25b2242cbaa1a03c4902b6d6b333952b512fa649631a964a75b2a1b3fbf98ef5"
 # Fake Beam (api/src/beam.rs): dev has no Beam account. Never set this in
 # production — the code refuses to run if a real BEAM_API_KEY is also present.
 BEAM_MOCK = "1"
