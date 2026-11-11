@@ -11,6 +11,7 @@ const KEY = 'pos.announce'
 
 let ctx: AudioContext | null = null
 let wakeLock: WakeLockSentinel | null = null
+let speechUnlocked = false
 const spoken = new Set<string>()
 
 export function announceEnabled(): boolean {
@@ -38,11 +39,13 @@ export function unlockAudio(): void {
   } catch {
     /* no Web Audio: speech alone */
   }
+  if (speechUnlocked) return
   try {
     // an empty utterance inside the gesture unlocks speechSynthesis on iOS
     const u = new SpeechSynthesisUtterance('')
     u.volume = 0
     window.speechSynthesis?.speak(u)
+    speechUnlocked = true
   } catch {
     /* no speech synthesis */
   }
@@ -87,6 +90,11 @@ function speak(text: string): void {
   if (v) u.voice = v
   u.rate = 0.95
   u.volume = 1
+  u.onerror = (e) => console.warn('announce: speech failed', e.error)
+  // Chrome/Android can leave the queue paused or stuck after idle: clear it
+  // so this announcement is not stuck behind a dead utterance.
+  if (synth.paused) synth.resume()
+  if (synth.speaking || synth.pending) synth.cancel()
   synth.speak(u)
 }
 
@@ -101,7 +109,14 @@ function bahtWords(satang: number): string {
 export function announcePaid(paymentId: string, amountSatang: number, queueNumber: number): void {
   if (!announceEnabled() || spoken.has(paymentId)) return
   spoken.add(paymentId)
-  void chime().then(() => speak(`ได้รับเงิน ${bahtWords(amountSatang)} คิว ${queueNumber}`))
+  const text = `ได้รับเงิน ${bahtWords(amountSatang)} คิว ${queueNumber}`
+  // the context may have been suspended since the last tap (idle / screen
+  // dim): wake it first, then chime, then speak. Speak even if the chime fails.
+  const wake = ctx ? ctx.resume().catch(() => undefined) : Promise.resolve()
+  void wake
+    .then(chime)
+    .catch(() => undefined)
+    .then(() => speak(text))
 }
 
 /** Marks payments as already spoken (e.g. ones confirmed before the page opened). */

@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 use crate::auth::staff::StaffAuth;
 use crate::extract::ApiJson;
 use crate::routes::owner::menu::{
-    load_menu_item, load_option, MenuItem, MenuOption, OptionGroup,
+    load_menu_item, load_option, menu_stock_out_json, MenuItem, MenuOption, OptionGroup,
 };
 use crate::util::{int, now_ms, parse_uuid, txt};
 use crate::{db, error::ApiError, AppState};
@@ -100,6 +100,11 @@ pub async fn staff_menu(
         .all()
         .await?
         .results::<MenuOption>()?;
+
+    // stock_out is derived per row (auto-block): the counter dims it next to
+    // the manual sold_out flag. One read for the whole shop.
+    let (items, options) =
+        menu_stock_out_json(env, &shop_id, items, options).await?;
 
     Ok(Json(json!({
         "items": items,

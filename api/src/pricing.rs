@@ -11,14 +11,20 @@
 //! path of `price_line`).
 //!
 //! Rules, applied in order:
-//! 1. the item must be sellable right now (active, not sold out),
+//! 1. the item must be sellable right now (active, not sold out) and its own
+//!    recipe must not be short of an auto_block ingredient (migration 0010),
 //! 2. every picked option id must belong to an applicable group, at most
-//!    once, and must not be sold out,
+//!    once, and must not be sold out nor short of an auto_block ingredient,
 //! 3. per-group pick policy (required needs a pick, max_select caps picks),
 //! 4. the base price (rice_curry 1-2-3 curry tiers, FEATURES 3.4),
 //! 5. counter: base + add-ons,
 //! 6. delivery: a made_to_order channel override (no markup) or the shop's
 //!    per-channel markup (FEATURES 3.6).
+//!
+//! The stock rule (1 / 2) is DERIVED server-side from recipe_uses x
+//! ingredients.qty + reserve ([`crate::stock`]), unlike sold_out which the
+//! counter sets by hand; the whole-bill variant (one plate each fits, the sum
+//! does not) lives with the order lines in `routes::orders`.
 
 // Pure code only. Until the order endpoints (M1-2) call into it, only the
 // host unit tests do, and wasm builds compile no tests - hence the
@@ -33,10 +39,13 @@ use crate::error::ApiError;
 const CHANNELS: [&str; 4] = ["counter", "grab", "lineman", "foodpanda"];
 
 /// The menu item being priced - only the fields pricing depends on. Handlers
-/// copy them from the menu_items row of the same name.
+/// copy them from the menu_items row of the same name (`stock_out` is derived
+/// from the recipe, migration 0010, and handed in with the row).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PricingItem {
     pub id: String,
+    /// Shown in the stock refusal below (FEATURES 3.67).
+    pub name: String,
     /// "rice_curry" | "made_to_order" (schema 0001).
     pub menu_type: String,
     /// Plate with 1 curry (rice_curry) / the only price (made_to_order).
@@ -49,6 +58,8 @@ pub struct PricingItem {
     /// "active" | "inactive".
     pub status: String,
     pub sold_out: bool,
+    /// The item's own recipe is short of an auto_block ingredient (0010).
+    pub stock_out: bool,
 }
 
 /// One option group. A group APPLIES to the priced item when its
@@ -74,6 +85,8 @@ pub struct PricingOption {
     pub name: String,
     pub price_add: i64,
     pub sold_out: bool,
+    /// This option's recipe is short of an auto_block ingredient (0010).
+    pub stock_out: bool,
 }
 
 /// A picked option, echoed verbatim into the order-line snapshot
@@ -120,6 +133,15 @@ pub fn price_line(
     if item.status != "active" || item.sold_out {
         return Err(ApiError::BadRequest("menu item is not available".into()));
     }
+    // Rule 1, stock half (migration 0010): the item's own recipe is short of
+    // an auto_block ingredient. Same refusal as sold_out above, but the
+    // message names the plate so the counter knows which one to skip.
+    if item.stock_out {
+        return Err(ApiError::BadRequest(format!(
+            "เมนู{} ยังขายไม่ได้: วัตถุดิบไม่พอ",
+            item.name
+        )));
+    }
 
     // Only groups that apply to this item take part (see PricingGroup).
     let applicable: Vec<&PricingGroup> = groups
@@ -148,6 +170,16 @@ pub fn price_line(
         }
         if option.sold_out {
             return Err(ApiError::BadRequest(format!("option {id} is sold out")));
+        }
+        // Rule 2, stock half (migration 0010): this choice's own recipe is
+        // short of an auto_block ingredient. Same shape as the item refusal
+        // above and, like it, in Thai (FEATURES 3.67) - the counter reads the
+        // message off the button it just tapped.
+        if option.stock_out {
+            return Err(ApiError::BadRequest(format!(
+                "ตัวเลือก{} ยังขายไม่ได้: วัตถุดิบไม่พอ",
+                option.name
+            )));
         }
         picks_per_group[group_index] += 1;
         options.push(SelectedOption {
@@ -301,6 +333,7 @@ mod tests {
     fn rice_curry_item() -> PricingItem {
         PricingItem {
             id: "item-rice".into(),
+            name: "ข้าวราดแกง".into(),
             menu_type: "rice_curry".into(),
             base_price: 5000,
             price_2: Some(6000),
@@ -310,12 +343,14 @@ mod tests {
             foodpanda_price: None,
             status: "active".into(),
             sold_out: false,
+            stock_out: false,
         }
     }
 
     fn made_to_order_item() -> PricingItem {
         PricingItem {
             id: "item-mto".into(),
+            name: "ก๋วยเตี๋ยว".into(),
             menu_type: "made_to_order".into(),
             base_price: 6000,
             price_2: None,
@@ -325,6 +360,7 @@ mod tests {
             foodpanda_price: None,
             status: "active".into(),
             sold_out: false,
+            stock_out: false,
         }
     }
 
@@ -334,6 +370,7 @@ mod tests {
             name: format!("opt {id}"),
             price_add,
             sold_out: false,
+            stock_out: false,
         }
     }
 
@@ -455,6 +492,66 @@ mod tests {
         );
         assert_eq!(
             bad(price_line(&item, &groups, "counter", &no_markup(), &picks(&["crab"]))),
+            "option crab is sold out"
+        );
+    }
+
+    #[test]
+    fn an_item_short_of_an_auto_block_ingredient_is_refused() {
+        // The manual sold_out flag stays false: the recipe is what is short
+        // (migration 0010), so the refusal must name the plate, not the flag.
+        let mut item = made_to_order_item();
+        assert!(!item.sold_out);
+        item.stock_out = true;
+        let groups = vec![extras_group()];
+        assert_eq!(
+            bad(price_line(&item, &groups, "counter", &no_markup(), &picks(&["egg"]))),
+            "เมนูก๋วยเตี๋ยว ยังขายไม่ได้: วัตถุดิบไม่พอ"
+        );
+        // Delivery channels refuse the same plate for the same reason - the
+        // rule sits in front of every price path (rule order 1 before 4-6).
+        assert!(bad(price_line(&item, &groups, "grab", &no_markup(), &[]))
+            .contains("วัตถุดิบไม่พอ"));
+        // With stock back in, the very same line sells again.
+        item.stock_out = false;
+        assert!(price_line(&item, &groups, "counter", &no_markup(), &picks(&["egg"])).is_ok());
+    }
+
+    #[test]
+    fn an_option_short_of_an_auto_block_ingredient_is_refused() {
+        // Only the pot is short: the plate itself (and the other choice)
+        // still sells, so the refusal must name the PICK, not the item.
+        let mut pot = option("crab", 2000);
+        pot.stock_out = true;
+        let groups = vec![group(
+            "g",
+            None,
+            false,
+            None,
+            false,
+            vec![option("egg", 1000), pot.clone()],
+        )];
+        let item = made_to_order_item();
+        assert_eq!(
+            bad(price_line(&item, &groups, "counter", &no_markup(), &picks(&["crab"]))),
+            "ตัวเลือกopt crab ยังขายไม่ได้: วัตถุดิบไม่พอ"
+        );
+        // Not picked -> not refused: the option only uses its recipe when it
+        // is actually on the plate.
+        let line = price_line(&item, &groups, "counter", &no_markup(), &picks(&["egg"])).unwrap();
+        assert_eq!(line.unit_price, 6000 + 1000);
+        // A stock_out pick loses to nothing else about the picks: it is
+        // checked right after sold_out (rule 2).
+        let mut sold = pot.clone();
+        sold.sold_out = true;
+        assert_eq!(
+            bad(price_line(
+                &item,
+                &[group("g", None, false, None, false, vec![sold])],
+                "counter",
+                &no_markup(),
+                &picks(&["crab"])
+            )),
             "option crab is sold out"
         );
     }

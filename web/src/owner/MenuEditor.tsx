@@ -571,12 +571,12 @@ export default function MenuEditor() {
 
         <div className="row">
           <label className="grow">
-            ชื่อประเภท
+            ชื่อเมนู
             <AutoText
               value={it.name}
               placeholder="เช่น ก๋วยเตี๋ยว"
               onCommit={(v) => saveItemFields(it, { name: v })}
-              onEmpty={() => flash('กรอกชื่อประเภทก่อน', true)}
+              onEmpty={() => flash('กรอกชื่อเมนูก่อน', true)}
             />
           </label>
           <label style={{ flex: '0 0 130px' }}>

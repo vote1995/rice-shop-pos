@@ -7,6 +7,11 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      // We register (and, on the owner host, unregister) the service worker
+      // ourselves in main.tsx. Do NOT inject the auto register script: it runs
+      // from <head> before main.tsx and would re-install the SW on owner.*,
+      // where it must stay off (Access 302s block SW updates → stale UI).
+      injectRegister: false,
       includeAssets: ['icon.svg'],
       manifest: {
         name: 'POS ร้านข้าว',

@@ -84,7 +84,7 @@ function applyMarkup(price: number, channel: Channel, markup: ChannelMarkup): nu
 /**
  * Prices ONE line: `item` with `selected` option ids (selection order kept)
  * sold on `channel`. Rules and their order mirror price_line in pricing.rs:
- * sellable item -> resolve picks (unknown/duplicate/sold-out rejected) ->
+ * sellable item -> resolve picks (unknown/duplicate/sold-out/stock-out rejected) ->
  * per-group pick policy -> tier base price -> add-ons -> counter price or
  * (made_to_order override | shop markup).
  */
@@ -97,6 +97,12 @@ export function priceLine(
   // Rule 1: sellable right now.
   if (item.status !== 'active' || item.sold_out) {
     return { ok: false, error: `เมนู "${item.name}" ของหมดอยู่ ขายไม่ได้` }
+  }
+  // Rule 1, stock half: the item's own recipe is short of an auto_block
+  // ingredient (derived stock_out, migration 0010). Same refusal as sold_out,
+  // message mirrors the server's Thai one in pricing.rs.
+  if (item.stock_out) {
+    return { ok: false, error: `เมนู "${item.name}" ยังขายไม่ได้: วัตถุดิบไม่พอ` }
   }
 
   // Rule 2: resolve every picked id, at most once, not sold out.
@@ -116,6 +122,9 @@ export function priceLine(
     const opt = groups[gi].options.find((o) => o.id === id)
     if (!opt) return { ok: false, error: 'ไม่พบตัวเลือกนี้' }
     if (opt.sold_out) return { ok: false, error: `ตัวเลือก "${opt.name}" ของหมดแล้ว` }
+    // Rule 2, stock half: derived stock_out — same refusal as sold_out, the
+    // message mirrors the server's Thai one in pricing.rs.
+    if (opt.stock_out) return { ok: false, error: `ตัวเลือก "${opt.name}" ยังขายไม่ได้: วัตถุดิบไม่พอ` }
     picksPerGroup[gi] += 1
     options.push({ id: opt.id, name: opt.name, price_add: opt.price_add })
   }

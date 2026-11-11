@@ -2,7 +2,8 @@
 //!
 //! - `GET  /owner/shops/{shop_id}/stock`       ingredients (+ used today) and every recipe row
 //! - `POST /owner/ingredients`                 create (client UUID, idempotent)
-//! - `PUT  /owner/ingredients/{id}`            rename / unit / alert level / active
+//! - `PUT  /owner/ingredients/{id}`            rename / unit / alert level / active /
+//!   auto_block / reserve (migration 0010)
 //! - `POST /owner/ingredients/{id}/restock`    {move_id, amount} qty += amount
 //! - `POST /owner/ingredients/{id}/count`      {move_id, qty}    qty := counted
 //! - `PUT  /owner/recipe`                      replace the uses of ONE menu item or option
@@ -27,12 +28,12 @@ use crate::auth::owner::OwnerAuth;
 use crate::extract::ApiJson;
 use crate::routes::orders::{bangkok_day_start_ms, changes};
 use crate::routes::owner::menu::{load_menu_item, load_option};
-use crate::stock::{self, check_qty, parse_amount, real};
+use crate::stock::{self, bool_from_int, check_qty, parse_amount, real};
 use crate::util::{clean_name, int, now_ms, parse_uuid, txt};
 use crate::{db, error::ApiError, AppState};
 
-const INGREDIENT_COLUMNS: &str =
-    "id, shop_id, name, unit, qty, alert_level, status, sort_order, created_at, updated_at";
+const INGREDIENT_COLUMNS: &str = "id, shop_id, name, unit, qty, alert_level, auto_block, \
+     reserve, status, sort_order, created_at, updated_at";
 const MAX_UNIT_CHARS: usize = 20;
 const MAX_USES: usize = 30;
 
@@ -44,6 +45,11 @@ pub struct Ingredient {
     pub unit: String,
     pub qty: f64,
     pub alert_level: f64,
+    /// 0010: 1 = this ingredient may block the menu when it runs out.
+    #[serde(deserialize_with = "bool_from_int")]
+    pub auto_block: bool,
+    /// 0010: "lower floor" - `qty + reserve` is what may still go out.
+    pub reserve: f64,
     pub status: String,
     pub sort_order: i64,
     pub created_at: i64,
@@ -71,6 +77,12 @@ pub struct CreateIngredientBody {
     pub qty: f64,
     #[serde(default)]
     pub alert_level: f64,
+    /// Omitted => 0 (off): nothing blocks anything until the owner opts in.
+    #[serde(default)]
+    pub auto_block: bool,
+    /// Omitted => 0 (block as soon as qty is short).
+    #[serde(default)]
+    pub reserve: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +92,12 @@ pub struct UpdateIngredientBody {
     pub unit: String,
     pub alert_level: f64,
     pub status: String,
+    /// 0010 fields are newer than the clients that PUT here: omitted keeps
+    /// the stored value instead of silently resetting it.
+    #[serde(default)]
+    pub auto_block: Option<bool>,
+    #[serde(default)]
+    pub reserve: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -263,6 +281,7 @@ pub async fn create_ingredient(
     let unit = clean_unit(&body.unit)?;
     let qty = check_qty(body.qty, "qty")?;
     let alert = check_qty(body.alert_level, "alert_level")?;
+    let reserve = check_qty(body.reserve, "reserve")?;
     let env = &state.env;
     if !shop_exists(env, &shop_id).await? {
         return Err(ApiError::BadRequest(format!("shop {shop_id} does not exist")));
@@ -270,12 +289,22 @@ pub async fn create_ingredient(
     let now = now_ms();
     let result = db::db(env)?
         .prepare(
-            "INSERT INTO ingredients (id, shop_id, name, unit, qty, alert_level, status,
-                                      sort_order, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', 0, ?7, ?7)
+            "INSERT INTO ingredients (id, shop_id, name, unit, qty, alert_level, auto_block,
+                                      reserve, status, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active', 0, ?9, ?9)
              ON CONFLICT(id) DO NOTHING",
         )
-        .bind(&[txt(&id), txt(&shop_id), txt(&name), txt(&unit), real(qty), real(alert), int(now)])?
+        .bind(&[
+            txt(&id),
+            txt(&shop_id),
+            txt(&name),
+            txt(&unit),
+            real(qty),
+            real(alert),
+            int(i64::from(body.auto_block)),
+            real(reserve),
+            int(now),
+        ])?
         .run()
         .await?;
     let stored = load_ingredient(env, &id)
@@ -306,13 +335,26 @@ pub async fn update_ingredient(
         return Err(ApiError::BadRequest("status must be active or inactive".into()));
     }
     let env = &state.env;
+    // 0010 fields: omitted (older clients) keeps what is stored.
+    let existing = load_ingredient(env, &id).await?.ok_or(ApiError::NotFound)?;
+    let auto_block = body.auto_block.unwrap_or(existing.auto_block);
+    let reserve = check_qty(body.reserve.unwrap_or(existing.reserve), "reserve")?;
     let result = db::db(env)?
         .prepare(
             "UPDATE ingredients SET name = ?1, unit = ?2, alert_level = ?3, status = ?4,
-                                    updated_at = ?5
-             WHERE id = ?6",
+                                    auto_block = ?5, reserve = ?6, updated_at = ?7
+             WHERE id = ?8",
         )
-        .bind(&[txt(&name), txt(&unit), real(alert), txt(&body.status), int(now_ms()), txt(&id)])?
+        .bind(&[
+            txt(&name),
+            txt(&unit),
+            real(alert),
+            txt(&body.status),
+            int(i64::from(auto_block)),
+            real(reserve),
+            int(now_ms()),
+            txt(&id),
+        ])?
         .run()
         .await?;
     if changes(&result)? == 0 {

@@ -740,14 +740,16 @@ export default function Counter({
   }
 
   function tapType(item: MenuItem) {
-    if (item.sold_out) return // long-press toggles it back on
+    // manual sold_out OR derived stock_out: nothing to sell — long-press still
+    // flips the MANUAL flag only
+    if (item.sold_out || item.stock_out) return
     setTypeId(item.id)
     setMsg('')
   }
 
   /** Group mode straight from the fields (no owner-set "mode" column). */
   function tapOption(g: GroupWithOptions, opt: MenuOption) {
-    if (opt.sold_out || !type) return
+    if (opt.sold_out || opt.stock_out || !type) return
     const single = g.group.max_select === 1
     if (picks.includes(opt.id)) {
       // required pick-one: a required choice can never be un-tapped, only switched
@@ -771,7 +773,7 @@ export default function Counter({
 
   /** QUICK type: one tap on a choice goes straight into the cart. */
   function tapQuickOption(item: MenuItem, opt: MenuOption) {
-    if (opt.sold_out || !menu) return
+    if (opt.sold_out || opt.stock_out || !menu) return
     const r = priceLine(menu, item, activeChannel, [opt.id])
     if (!r.ok) {
       setMsg(r.error)
@@ -902,6 +904,8 @@ export default function Counter({
     setDrafts((prev) => ({ ...prev, current: blankCart(channel) }))
     setPicks([])
     void loadOrders()
+    // the order just consumed ingredients: pull fresh derived stock_out flags
+    void loadMenu()
     if (andPay) {
       setPayResult(null)
       setPayFor(order)
@@ -958,6 +962,8 @@ export default function Counter({
     setPicks([])
     setStaffMealOn(false)
     void loadOrders()
+    // the plate just consumed ingredients: pull fresh derived stock_out flags
+    void loadMenu()
     flash('ส่งครัวแล้ว (สวัสดิการ)')
   }
 
@@ -982,6 +988,8 @@ export default function Counter({
     setDrafts((prev) => ({ ...prev, current: blankCart(channel) }))
     setPicks([])
     void loadOrders()
+    // the added lines just consumed ingredients: refresh derived stock_out
+    void loadMenu()
     setTab('queue')
     flash(`เพิ่มเข้าคิว #${order.queue_number} แล้ว · ${baht(order.total_amount)}`)
   }
@@ -1075,12 +1083,18 @@ export default function Counter({
     g.options.filter((o) => picks.includes(o.id)).map((o) => o.name),
   )
   const addReady =
-    !!type && missingGroups.length === 0 && !!priced && priced.ok && !type.sold_out
+    !!type &&
+    missingGroups.length === 0 &&
+    !!priced &&
+    priced.ok &&
+    !(type.sold_out || type.stock_out)
   const addLabel = !type
     ? ''
     : type.sold_out
       ? `เมนูนี้ของหมดอยู่`
-      : missingGroups.length > 0
+      : type.stock_out
+        ? `เมนูนี้วัตถุดิบหมด`
+        : missingGroups.length > 0
         ? `ยังไม่ได้เลือก: ${missingGroups.join(', ')}`
         : priced && priced.ok
           ? `ใส่ตะกร้า · ${baht(priced.unitPrice)}`
@@ -1424,12 +1438,16 @@ export default function Counter({
           {items.map((it) => (
             <LongPressButton
               key={it.id}
-              className={`pos-type${type?.id === it.id ? ' on' : ''}${it.sold_out ? ' soldout' : ''}`}
+              className={`pos-type${type?.id === it.id ? ' on' : ''}${it.sold_out || it.stock_out ? ' soldout' : ''}`}
               onLong={() => void toggleItemSoldOut(it)}
               onTap={() => tapType(it)}
             >
               {it.name}
-              {it.sold_out ? <span className="pos-type-sub">ของหมด</span> : null}
+              {it.sold_out ? (
+                <span className="pos-type-sub">ของหมด</span>
+              ) : it.stock_out ? (
+                <span className="pos-type-sub">วัตถุดิบหมด</span>
+              ) : null}
             </LongPressButton>
           ))}
         </div>
@@ -1487,13 +1505,13 @@ export default function Counter({
     return (
       <LongPressButton
         key={o.id}
-        className={`pos-choice${on || inCart > 0 ? ' on' : ''}${o.sold_out ? ' soldout' : ''}`}
+        className={`pos-choice${on || inCart > 0 ? ' on' : ''}${o.sold_out || o.stock_out ? ' soldout' : ''}`}
         onLong={() => void toggleOptionSoldOut(o)}
         onTap={() => (quick ? tapQuickOption(type, o) : tapOption(g, o))}
       >
         <span className="pos-choice-name">
           {o.name}
-          {o.sold_out ? ' (หมด)' : ''}
+          {o.sold_out ? ' (หมด)' : o.stock_out ? ' (วัตถุดิบหมด)' : ''}
         </span>
         {inCart > 0 ? (
           <span className="pos-choice-badge" aria-hidden="true">

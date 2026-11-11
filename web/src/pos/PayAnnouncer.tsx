@@ -30,7 +30,8 @@ export default function PayAnnouncer() {
   useEffect(() => {
     if (!on) return
     const unlock = () => unlockAudio()
-    window.addEventListener('pointerdown', unlock, { once: true })
+    // every tap, not just the first: re-wakes an audio context the OS suspended
+    window.addEventListener('pointerdown', unlock)
     return () => window.removeEventListener('pointerdown', unlock)
   }, [on])
 

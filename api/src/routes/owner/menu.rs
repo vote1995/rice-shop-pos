@@ -29,6 +29,7 @@ use worker::Env;
 use crate::util::{clean_name, int, now_ms, opt_int, opt_txt, parse_uuid, txt};
 use crate::auth::owner::OwnerAuth;
 use crate::extract::ApiJson;
+use crate::stock;
 use crate::{db, error::ApiError, AppState};
 
 /// Upper bound for any money value handled here (10,000,000 satang = 100,000 THB).
@@ -465,6 +466,40 @@ async fn tier_group_on(env: &Env, menu_item_id: &str) -> Result<Option<String>, 
         .await?)
 }
 
+/// One menu row with the DERIVED `stock_out` flag added (migration 0010).
+/// `sold_out` stays the manual counter flag; this one says an auto_block
+/// ingredient behind the row's recipe has run out. The row structs are read
+/// from D1 as-is, so the flag is added after loading (never a SELECT column).
+fn with_stock_out_flag(mut row: Value, stock_out: bool) -> Value {
+    row["stock_out"] = json!(stock_out);
+    row
+}
+
+/// Every item and option of the menu as JSON, each tagged with its derived
+/// `stock_out` (one read for the whole shop - shared by the owner and staff
+/// menu endpoints, so both apps always agree on the field).
+pub(crate) async fn menu_stock_out_json(
+    env: &Env,
+    shop_id: &str,
+    items: Vec<MenuItem>,
+    options: Vec<MenuOption>,
+) -> Result<(Vec<Value>, Vec<Value>), ApiError> {
+    let out = stock::load_stock_out(env, shop_id).await?;
+    // Nothing short anywhere (every shop without auto_block ingredients is
+    // always in that state, 0010's default): then every row takes the same
+    // false flag and the per-row lookups are skipped.
+    let nothing_out = out.is_empty();
+    let items = items
+        .into_iter()
+        .map(|i| with_stock_out_flag(json!(i), !nothing_out && out.is_item_out(&i.id)))
+        .collect();
+    let options = options
+        .into_iter()
+        .map(|o| with_stock_out_flag(json!(o), !nothing_out && out.is_option_out(&o.id)))
+        .collect();
+    Ok((items, options))
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -529,6 +564,10 @@ pub async fn shop_menu(
         .all()
         .await?
         .results::<MenuOption>()?;
+
+    // stock_out is derived per row (auto-block), not a menu column.
+    let (items, options) =
+        menu_stock_out_json(env, &shop_id, items, options).await?;
 
     Ok(Json(json!({
         "items": items,
