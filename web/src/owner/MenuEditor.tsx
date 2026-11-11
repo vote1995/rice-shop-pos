@@ -152,6 +152,8 @@ export default function MenuEditor() {
   const [markupMsg, setMarkupMsg] = useState<{ text: string; bad: boolean } | null>(null)
   const [imgBusy, setImgBusy] = useState(false)
   const [imgErr, setImgErr] = useState('')
+  // "template" copy sheet (open only while one item is being edited)
+  const [tplOpen, setTplOpen] = useState(false)
   const saveTimer = useRef<number | null>(null)
 
   const load = useCallback(async () => {
@@ -178,6 +180,12 @@ export default function MenuEditor() {
   useEffect(() => {
     setEditId(null)
   }, [shopId])
+
+  // the template sheet belongs to ONE item: leaving the editor or switching
+  // items/shops must close it, or it would pop open on the next item
+  useEffect(() => {
+    setTplOpen(false)
+  }, [editId, shopId])
 
   // markup card follows the freshly loaded data (also re-syncs after save)
   useEffect(() => {
@@ -403,6 +411,14 @@ export default function MenuEditor() {
     }
   }
 
+  /** Template copy landed: close the sheet, flash, and (แก้ไข) focus + select
+   *  the first copied option so the owner can rename it right away. */
+  function templateApplied(focusFirst: string | null) {
+    setTplOpen(false)
+    if (focusFirst !== null) setFocusOptId(focusFirst)
+    flash('คัดลอกหัวข้อแล้ว')
+  }
+
   // Never-sold types are deleted for real; ones on old bills are hidden
   // (server decides, `archived` says which). Either way they leave both apps.
   async function deleteType(it: MenuItem) {
@@ -515,6 +531,13 @@ export default function MenuEditor() {
   /** Old shop-wide lists (menu_item_id null): they show on EVERY type at the counter. */
   const sharedLists = data ? data.option_groups.filter((g) => g.menu_item_id === null && !g.tier_pricing) : []
   const optionsOf = (groupId: string) => (data ? data.options.filter((o) => o.option_group_id === groupId) : [])
+  /** Template sources: OTHER items that already have option lists (tier-pricing
+   *  groups never count — they are rice_curry-specific and never copied). */
+  const templateSources = data
+    ? data.items.filter(
+        (x) => x.id !== editId && data.option_groups.some((g) => g.menu_item_id === x.id && !g.tier_pricing),
+      )
+    : []
 
   const editItem = editId !== null ? items.find((i) => i.id === editId) : undefined
 
@@ -688,6 +711,17 @@ export default function MenuEditor() {
         >
           + เพิ่มของเสริม (ติ๊ก = ใส่, ไม่ติ๊ก = ไม่ใส่)
         </button>
+        {templateSources.length > 0 ? (
+          <button
+            className="btn ghost"
+            style={{ minHeight: 48, border: '1.5px dashed var(--border)', color: 'var(--green-dark)' }}
+            title="คัดลอกหัวข้อและตัวเลือกจากประเภทอื่น มาเป็นชุดใหม่ของประเภทนี้ (ต้นทางไม่เปลี่ยน)"
+            disabled={!shopId}
+            onClick={() => setTplOpen(true)}
+          >
+            template
+          </button>
+        ) : null}
         <button
           className="btn danger"
           style={{ minHeight: 48, marginTop: 16 }}
@@ -696,6 +730,19 @@ export default function MenuEditor() {
         >
           ลบประเภท "{it.name}"
         </button>
+
+        {tplOpen && data && shopId ? (
+          <TemplateSheet
+            shopId={shopId}
+            item={it}
+            menu={data}
+            sources={templateSources}
+            onClose={() => setTplOpen(false)}
+            onGroup={upsertGroup}
+            onOption={upsertOption}
+            onApplied={templateApplied}
+          />
+        ) : null}
       </section>
     )
   }
@@ -817,6 +864,187 @@ export default function MenuEditor() {
         </div>
       </section>
     </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// "template" sheet: copy another item's option groups (+ their options) onto
+// the item being edited. It is a DEEP copy — every row is POSTed fresh with a
+// new id and the CURRENT item's menu_item_id, so the source item is never
+// shared, moved or modified. Tier-pricing groups are never offered.
+// ---------------------------------------------------------------------------
+
+function TemplateSheet({
+  shopId,
+  item,
+  menu,
+  sources,
+  onClose,
+  onGroup,
+  onOption,
+  onApplied,
+}: {
+  shopId: string
+  /** the item being edited — every copied group lands on it */
+  item: MenuItem
+  menu: MenuData
+  /** other items that already have option lists, in menu order */
+  sources: MenuItem[]
+  onClose: () => void
+  /** patch helpers of the editor (upsertGroup / upsertOption) */
+  onGroup: (g: OptionGroup) => void
+  onOption: (o: MenuOption) => void
+  /** apply finished: non-null = focus that option's name input ("แก้ไข") */
+  onApplied: (focusFirst: string | null) => void
+}) {
+  // default source = the LAST candidate in menu order (≈ most recently created)
+  const [srcId, setSrcId] = useState(() => (sources.length > 0 ? sources[sources.length - 1].id : ''))
+  /** group ids whose checkbox is unticked (default: everything gets copied) */
+  const [skip, setSkip] = useState<Record<string, boolean>>({})
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  // Fresh row ids per source group, made ONCE per sheet open: a retry after a
+  // network error replays the same ids, so the idempotent POSTs never
+  // duplicate the groups that already made it (same trick as the stock move_id).
+  const planIds = useRef(new Map<string, { group: string; options: string[] }>())
+
+  const listsOfSrc = (id: string) => menu.option_groups.filter((g) => g.menu_item_id === id && !g.tier_pricing)
+  const groups = listsOfSrc(srcId)
+  const checked = groups.filter((g) => !skip[g.id])
+  const optsOf = (groupId: string) => menu.options.filter((o) => o.option_group_id === groupId)
+
+  // เพิ่ม = copy + close; แก้ไข = copy + close + focus the first copied option
+  // so the groups stay open for normal inline editing.
+  async function apply(thenEdit: boolean) {
+    if (checked.length === 0) {
+      setErr('ติ๊กหัวข้อที่จะคัดลอกอย่างน้อย 1 หัวข้อ')
+      return
+    }
+    setBusy(true)
+    setErr('')
+    let firstOptId: string | null = null
+    try {
+      for (const src of checked) {
+        const opts = optsOf(src.id)
+        let ids = planIds.current.get(src.id)
+        if (!ids) {
+          ids = { group: crypto.randomUUID(), options: opts.map(() => crypto.randomUUID()) }
+          planIds.current.set(src.id, ids)
+        }
+        // Same body shape as addList, but with the source's name/policy/order
+        // and the CURRENT item's menu_item_id.
+        const g = await api<OptionGroup>('POST', '/api/owner/option-groups', {
+          id: ids.group,
+          shop_id: shopId,
+          menu_item_id: item.id,
+          name: src.name,
+          required: src.required,
+          max_select: src.max_select,
+          tier_pricing: false,
+          sort_order: src.sort_order,
+        })
+        onGroup(g)
+        for (let i = 0; i < opts.length; i++) {
+          // Same body shape as addOption, with the source's name/price/order.
+          const o = await api<MenuOption>('POST', '/api/owner/options', {
+            id: ids.options[i],
+            option_group_id: g.id,
+            name: opts[i].name,
+            price_add: opts[i].price_add,
+            sort_order: opts[i].sort_order,
+          })
+          onOption(o)
+          if (firstOptId === null) firstOptId = o.id
+        }
+      }
+      onApplied(thenEdit ? firstOptId : null)
+    } catch (e) {
+      setErr(friendlyError(e)) // sheet stays open: applying again replays the same ids
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="sheet-backdrop" onClick={busy ? undefined : onClose}>
+      <div
+        className="sheet"
+        role="dialog"
+        aria-label="template — คัดลอกหัวข้อจากประเภทอื่น"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2>template — คัดลอกหัวข้อจากประเภทอื่น</h2>
+        <p className="muted small">
+          เลือกประเภทที่มีหัวข้อครบแล้ว แล้วติ๊กหัวข้อที่จะคัดลอกมาเป็นชุดใหม่ของ "{item.name}" — ประเภทต้นทางไม่เปลี่ยนแปลง
+        </p>
+        {sources.length > 0 ? (
+          <>
+            <label>
+              คัดลอกจากประเภท
+              <select
+                value={srcId}
+                disabled={busy}
+                onChange={(e) => {
+                  setSrcId(e.target.value)
+                  setSkip({}) // every group of the new source starts checked
+                }}
+              >
+                {sources.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({listsOfSrc(s.id).length} หัวข้อ)
+                  </option>
+                ))}
+              </select>
+            </label>
+            {groups.map((g) => {
+              const opts = optsOf(g.id)
+              return (
+                <div className="group-block" key={g.id}>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={!skip[g.id]}
+                      disabled={busy}
+                      aria-label={`คัดลอกหัวข้อ ${g.name}`}
+                      onChange={() => setSkip({ ...skip, [g.id]: !skip[g.id] })}
+                    />
+                    <span style={{ flex: '1 1 auto', minWidth: 0 }}>
+                      <strong>{g.name}</strong>
+                      <span className="muted small" style={{ display: 'block' }}>
+                        {MODE_LABEL[modeOf(g)]}
+                      </span>
+                    </span>
+                    <span className="badge">{opts.length} ตัวเลือก</span>
+                  </label>
+                  {opts.map((o) => (
+                    <div className="tpl-opt" key={o.id}>
+                      <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{o.name}</span>
+                      <span className="muted small price">+฿{fmtBaht(o.price_add)}</span>
+                    </div>
+                  ))}
+                  {opts.length === 0 ? <p className="muted small">ยังไม่มีตัวเลือกในหัวข้อนี้</p> : null}
+                </div>
+              )
+            })}
+          </>
+        ) : (
+          <p className="muted">ยังไม่มีประเภทอื่นที่มีหัวข้อ — สร้างหัวข้อของประเภทหนึ่งให้เสร็จก่อน แล้วค่อยใช้ template</p>
+        )}
+        {err ? <p className="error small">{err}</p> : null}
+        {busy ? <p className="muted small">กำลังคัดลอก…</p> : null}
+        <div className="row">
+          <button type="button" className="btn primary grow" disabled={busy || checked.length === 0} onClick={() => void apply(false)}>
+            เพิ่ม
+          </button>
+          <button type="button" className="btn ghost" disabled={busy || checked.length === 0} onClick={() => void apply(true)}>
+            แก้ไข
+          </button>
+          <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>
+            ปิด
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 

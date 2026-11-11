@@ -1446,3 +1446,13 @@ body:has(.pos[data-theme="dark"]) { background: #0f1012; }
 .owner .sc-fill.real.bad { background: var(--danger); }
 .owner .sc-fill.real.warn { background: var(--warning); }
 .owner .sc-num { flex: none; font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+
+/* ---- OWNER menu editor: "template" copy sheet — read-only preview rows ----
+   One line per source option (name left, +price right), indented under the
+   group's checkbox. Layout only; colours come from the shared classes. */
+.tpl-opt {
+  display: flex; justify-content: space-between; gap: 8px;
+  padding-left: 30px;
+}
+.tpl-opt .price { flex: none; font-variant-numeric: tabular-nums; }
