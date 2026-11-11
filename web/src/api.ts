@@ -428,6 +428,8 @@ export interface MenuData {
   option_groups: OptionGroup[]
   options: MenuOption[]
   channel_markup: ChannelMarkup
+  /** Staff menu only: false when this shop has no Beam credentials (no QR). */
+  beam_qr?: boolean
 }
 
 // ---- owner stock (M1-6c): ingredients + per-plate recipe uses ----

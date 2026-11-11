@@ -2,8 +2,15 @@
 //!
 //! Everything about the upstream call is pinned HERE, server-side: base URL,
 //! payment method, currency, amount (always the bill's server total) and the
-//! credentials (`BEAM_MERCHANT_ID` / `BEAM_API_KEY` secrets). Nothing in a
-//! client request reaches Beam except through the validated fields below.
+//! credentials. Nothing in a client request reaches Beam except through the
+//! validated fields below.
+//!
+//! Credentials are PER SHOP: the `BEAM_SHOPS` secret is a JSON object
+//! `{"<shop id or shop name>": {"merchant_id", "api_key", "webhook_hmac_key"}}`
+//! (local file `api/.dev.vars`, never committed; prod via `wrangler secret
+//! put`). Once `BEAM_SHOPS` exists a shop without an entry has NO Beam QR.
+//! Without `BEAM_SHOPS` the old single set (`BEAM_MERCHANT_ID` /
+//! `BEAM_API_KEY` / `BEAM_WEBHOOK_HMAC_KEY`) serves every shop.
 //!
 //! Outcomes are three-way on purpose: a network error, a 5xx or a 429 from
 //! Beam is [`BeamError::Unavailable`] — UNDECIDABLE, the caller must not mark
@@ -18,6 +25,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::BTreeMap;
 use sha2::Sha256;
 use wasm_bindgen::JsValue;
 use worker::{Env, Fetch, Headers, Method, Request, RequestInit};
@@ -49,9 +57,9 @@ fn mock_mode(env: &Env) -> Result<bool, BeamError> {
         .var("BEAM_MOCK")
         .map(|v| v.to_string().trim() == "1")
         .unwrap_or(false);
-    if on && secret(env, "BEAM_API_KEY").is_ok() {
+    if on && (secret(env, "BEAM_API_KEY").is_ok() || secret(env, SHOPS_VAR).is_ok()) {
         return Err(BeamError::Config(
-            "BEAM_MOCK=1 refused: a real BEAM_API_KEY is also configured".into(),
+            "BEAM_MOCK=1 refused: real Beam credentials are also configured".into(),
         ));
     }
     Ok(on)
@@ -145,25 +153,116 @@ fn secret(env: &Env, name: &str) -> Result<String, BeamError> {
         .ok_or_else(|| BeamError::Config(format!("{name} is not set")))
 }
 
-/// The merchant id this deployment is configured for.
-pub fn merchant_id(env: &Env) -> Result<String, BeamError> {
-    if mock_mode(env)? {
-        return Ok(MOCK_MERCHANT_ID.to_string());
-    }
-    secret(env, "BEAM_MERCHANT_ID")
+const SHOPS_VAR: &str = "BEAM_SHOPS";
+
+/// One merchant's Beam credentials. No `Debug`: it must never reach a log.
+#[derive(Clone, Deserialize)]
+pub struct Creds {
+    pub merchant_id: String,
+    pub api_key: String,
+    #[serde(default)]
+    pub webhook_hmac_key: String,
 }
 
-fn auth_header(env: &Env) -> Result<String, BeamError> {
-    let id = merchant_id(env)?;
-    let key = secret(env, "BEAM_API_KEY")?;
-    Ok(format!(
+fn mock_creds() -> Creds {
+    Creds {
+        merchant_id: MOCK_MERCHANT_ID.to_string(),
+        api_key: String::new(),
+        webhook_hmac_key: String::new(),
+    }
+}
+
+/// Parses BEAM_SHOPS. Entries without a merchant id or key count as "not
+/// set". The error never echoes the value (it holds secrets).
+fn parse_shops(raw: &str) -> Result<Vec<(String, Creds)>, BeamError> {
+    let map: BTreeMap<String, Creds> = serde_json::from_str(raw).map_err(|_| {
+        BeamError::Config(
+            "BEAM_SHOPS is not valid: expected an object of shop -> {merchant_id, api_key, webhook_hmac_key}"
+                .into(),
+        )
+    })?;
+    Ok(map
+        .into_iter()
+        .filter(|(_, c)| !c.merchant_id.trim().is_empty() && !c.api_key.trim().is_empty())
+        .collect())
+}
+
+fn shops_config(env: &Env) -> Result<Option<Vec<(String, Creds)>>, BeamError> {
+    match secret(env, SHOPS_VAR) {
+        Ok(raw) => parse_shops(&raw).map(Some),
+        Err(_) => Ok(None),
+    }
+}
+
+/// The entry for a shop: the key is the shop's id or its name (case and
+/// surrounding spaces ignored).
+fn pick_shop(list: &[(String, Creds)], shop_id: &str, shop_name: &str) -> Option<Creds> {
+    let id = shop_id.trim().to_lowercase();
+    let name = shop_name.trim().to_lowercase();
+    list.iter()
+        .find(|(k, _)| {
+            let k = k.trim().to_lowercase();
+            !k.is_empty() && (k == id || k == name)
+        })
+        .map(|(_, c)| c.clone())
+}
+
+fn legacy_creds(env: &Env) -> Result<Creds, BeamError> {
+    Ok(Creds {
+        merchant_id: secret(env, "BEAM_MERCHANT_ID")?,
+        api_key: secret(env, "BEAM_API_KEY")?,
+        webhook_hmac_key: secret(env, "BEAM_WEBHOOK_HMAC_KEY").unwrap_or_default(),
+    })
+}
+
+/// Beam credentials of one shop. Ok(None) = this shop has no Beam QR.
+pub fn creds_for_shop(
+    env: &Env,
+    shop_id: &str,
+    shop_name: &str,
+) -> Result<Option<Creds>, BeamError> {
+    if mock_mode(env)? {
+        return Ok(Some(mock_creds()));
+    }
+    match shops_config(env)? {
+        Some(list) => Ok(pick_shop(&list, shop_id, shop_name)),
+        None => legacy_creds(env).map(Some),
+    }
+}
+
+/// Every credential set whose webhook key could have signed a webhook. The
+/// caller keeps the one whose signature verifies: that is the merchant.
+pub fn webhook_candidates(env: &Env) -> Result<Vec<Creds>, BeamError> {
+    if mock_mode(env)? {
+        return Ok(vec![]);
+    }
+    let all: Vec<Creds> = match shops_config(env)? {
+        Some(list) => list.into_iter().map(|(_, c)| c).collect(),
+        None => vec![legacy_creds(env)?],
+    };
+    let with_key: Vec<Creds> = all
+        .into_iter()
+        .filter(|c| !c.webhook_hmac_key.trim().is_empty())
+        .collect();
+    if with_key.is_empty() {
+        return Err(BeamError::Config("no Beam webhook_hmac_key is set".into()));
+    }
+    Ok(with_key)
+}
+
+fn auth_header(creds: &Creds) -> String {
+    format!(
         "Basic {}",
-        B64.encode(format!("{}:{}", id.trim(), key.trim()))
-    ))
+        B64.encode(format!(
+            "{}:{}",
+            creds.merchant_id.trim(),
+            creds.api_key.trim()
+        ))
+    )
 }
 
 async fn call(
-    env: &Env,
+    creds: &Creds,
     method: Method,
     path: &str,
     body: Option<String>,
@@ -175,7 +274,7 @@ async fn call(
             .set(k, v)
             .map_err(|e| BeamError::Config(format!("header {k}: {e}")))
     };
-    set("Authorization", &auth_header(env)?)?;
+    set("Authorization", &auth_header(creds))?;
     set("Accept", "application/json")?;
     if body.is_some() {
         set("Content-Type", "application/json")?;
@@ -221,6 +320,7 @@ fn classify(status: u16, path: &str, text: String) -> Result<String, BeamError> 
 /// (Beam keeps keys 12 h).
 pub async fn create_qr_charge(
     env: &Env,
+    creds: &Creds,
     amount_satang: i64,
     reference_id: &str,
 ) -> Result<QrCharge, BeamError> {
@@ -241,7 +341,7 @@ pub async fn create_qr_charge(
     })
     .to_string();
     let text = call(
-        env,
+        creds,
         Method::Post,
         "/api/v1/charges",
         Some(body),
@@ -265,7 +365,7 @@ pub async fn create_qr_charge(
 }
 
 /// Reads a charge's current state.
-pub async fn get_charge(env: &Env, charge_id: &str) -> Result<Charge, BeamError> {
+pub async fn get_charge(env: &Env, creds: &Creds, charge_id: &str) -> Result<Charge, BeamError> {
     if !charge_id
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
@@ -277,7 +377,7 @@ pub async fn get_charge(env: &Env, charge_id: &str) -> Result<Charge, BeamError>
             .ok_or_else(|| BeamError::Rejected(format!("unknown mock charge {charge_id}")));
     }
     let text = call(
-        env,
+        creds,
         Method::Get,
         &format!("/api/v1/charges/{charge_id}"),
         None,
@@ -303,11 +403,6 @@ pub fn verify_signature(hmac_key_b64: &str, body: &[u8], signature_b64: &str) ->
     mac.verify_slice(&sig).is_ok()
 }
 
-/// The webhook HMAC key secret.
-pub fn webhook_key(env: &Env) -> Result<String, BeamError> {
-    secret(env, "BEAM_WEBHOOK_HMAC_KEY")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,6 +424,49 @@ mod tests {
         assert!(!verify_signature(KEY, BODY.as_bytes(), "AAAA"));
         assert!(!verify_signature(KEY, BODY.as_bytes(), "not base64!"));
         assert!(!verify_signature("", BODY.as_bytes(), SIG));
+    }
+
+    fn c(m: &str) -> Creds {
+        Creds {
+            merchant_id: m.into(),
+            api_key: "k".into(),
+            webhook_hmac_key: "w".into(),
+        }
+    }
+
+    #[test]
+    fn shops_json_parses_and_skips_unfinished_entries() {
+        let raw = r#"{"rice":{"merchant_id":"m1","api_key":"k1","webhook_hmac_key":"w1"},
+                      "noodle":{"merchant_id":"","api_key":"","webhook_hmac_key":""},
+                      "s3":{"merchant_id":"m3","api_key":"k3"}}"#;
+        let list = parse_shops(raw).unwrap();
+        let keys: Vec<&str> = list.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"rice") && keys.contains(&"s3"));
+        assert!(!keys.contains(&"noodle"), "blank entry = no Beam");
+    }
+
+    #[test]
+    fn bad_shops_json_errors_without_echoing_the_value() {
+        let Err(BeamError::Config(msg)) = parse_shops(r#"{"a":"SECRET-VALUE"}"#) else {
+            panic!("must be a config error");
+        };
+        assert!(!msg.contains("SECRET-VALUE"));
+        assert!(parse_shops("not json").is_err());
+    }
+
+    #[test]
+    fn shop_is_matched_by_id_or_name_and_unlisted_shop_has_none() {
+        let list = vec![
+            ("Rice".to_string(), c("rice")),
+            ("5a000000-0000-4000-8000-000000000009".to_string(), c("noodle")),
+        ];
+        assert_eq!(pick_shop(&list, "x", " rice ").unwrap().merchant_id, "rice");
+        assert_eq!(
+            pick_shop(&list, "5A000000-0000-4000-8000-000000000009", "any").unwrap().merchant_id,
+            "noodle"
+        );
+        assert!(pick_shop(&list, "other-id", "third").is_none());
+        assert!(pick_shop(&[("".to_string(), c("m"))], "", "").is_none(), "empty key never matches");
     }
 
     #[test]

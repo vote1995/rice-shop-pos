@@ -114,6 +114,41 @@ fn beam_to_api(e: BeamError) -> ApiError {
     }
 }
 
+/// This shop's Beam credentials. `None` = the shop has no Beam QR (no entry
+/// in the per-shop config); `Err` = our configuration is broken.
+async fn shop_creds_opt(env: &Env, shop_id: &str) -> Result<Option<beam::Creds>, ApiError> {
+    let name = db::db(env)?
+        .prepare("SELECT name FROM shops WHERE id = ?1")
+        .bind(&[txt(shop_id)])?
+        .first::<String>(Some("name"))
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    beam::creds_for_shop(env, shop_id, &name).map_err(beam_to_api)
+}
+
+/// Like [`shop_creds_opt`] but a shop without Beam is a clear 409.
+async fn shop_creds(env: &Env, shop_id: &str) -> Result<beam::Creds, ApiError> {
+    shop_creds_opt(env, shop_id).await?.ok_or_else(|| {
+        ApiError::coded(
+            StatusCode::CONFLICT,
+            "beam_not_configured",
+            "ร้านนี้ไม่มี Beam QR — รับเงินสดแทน",
+        )
+    })
+}
+
+/// Whether the shop can take PromptPay QR at all: the POS hides the QR option
+/// when this is false. A broken configuration counts as unavailable.
+pub async fn qr_available(env: &Env, shop_id: &str) -> bool {
+    match shop_creds_opt(env, shop_id).await {
+        Ok(found) => found.is_some(),
+        Err(e) => {
+            worker::console_warn!("beam qr_available: {e:?}");
+            false
+        }
+    }
+}
+
 /// Marks a promptpay payment succeeded (Beam confirmed `beam_amount` satang)
 /// and closes its bill — one batch, idempotent. The payment is only marked
 /// when Beam's amount equals what we charged; the bill only closes while it
@@ -172,7 +207,15 @@ async fn refresh(env: &Env, p: &QrRow) -> Result<(), ApiError> {
     if p.status != "pending" {
         return Ok(());
     }
-    match beam::get_charge(env, charge_id).await {
+    let creds = match shop_creds_opt(env, &p.shop_id).await {
+        Ok(Some(c)) => c,
+        Ok(None) => return Ok(()),
+        Err(e) => {
+            worker::console_error!("beam status check: {e:?}");
+            return Ok(());
+        }
+    };
+    match beam::get_charge(env, &creds, charge_id).await {
         Ok(c) if c.status == "SUCCEEDED" => {
             if c.currency.as_deref() == Some("THB") {
                 settle(env, &p.id, c.amount).await?;
@@ -207,6 +250,8 @@ pub async fn create(
     let payment_id = parse_uuid(&body.payment_id, "payment_id")?.to_string();
     let shop_id = staff.shop_id;
     let env = &state.env;
+    // before anything is written: a shop without Beam creates no pending payment
+    let creds = shop_creds(env, &shop_id).await?;
 
     let order = load_order(env, &shop_id, &order_id)
         .await?
@@ -267,7 +312,7 @@ pub async fn create(
     if p.status == "pending" && p.beam_charge_id.is_none() {
         // First attempt, or a retry after an undecidable failure: the same
         // idempotency key returns the same charge.
-        match beam::create_qr_charge(env, p.amount, &payment_id).await {
+        match beam::create_qr_charge(env, &creds, p.amount, &payment_id).await {
             Ok(qr) => {
                 db::db(env)?
                     .prepare(
@@ -346,15 +391,20 @@ pub async fn webhook(
     body: Bytes,
 ) -> Result<StatusCode, ApiError> {
     let env = &state.env;
-    let key = beam::webhook_key(env).map_err(beam_to_api)?;
+    let candidates = beam::webhook_candidates(env).map_err(beam_to_api)?;
     let sig = headers
         .get("x-beam-signature")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if !beam::verify_signature(&key, &body, sig) {
+    // Each shop has its own merchant and webhook key: the key that verifies
+    // the signature says which merchant sent this.
+    let Some(creds) = candidates
+        .into_iter()
+        .find(|c| beam::verify_signature(&c.webhook_hmac_key, &body, sig))
+    else {
         worker::console_warn!("beam webhook: bad signature");
         return Err(ApiError::Unauthorized);
-    }
+    };
     let event = headers
         .get("x-beam-event")
         .and_then(|v| v.to_str().ok())
@@ -366,12 +416,8 @@ pub async fn webhook(
             return Ok(StatusCode::OK);
         }
     };
-    let ours = beam::merchant_id(env).map_err(beam_to_api)?;
-    if charge
-        .merchant_id
-        .as_deref()
-        .is_some_and(|m| m != ours.trim())
-    {
+    let ours = creds.merchant_id.trim();
+    if charge.merchant_id.as_deref().is_some_and(|m| m != ours) {
         worker::console_warn!("beam webhook: other merchant");
         return Ok(StatusCode::OK);
     }
@@ -383,6 +429,18 @@ pub async fn webhook(
         );
         return Ok(StatusCode::OK);
     };
+    // The payment must belong to the shop of the merchant that signed this:
+    // one shop's webhook key can never settle another shop's payment.
+    match shop_creds_opt(env, &p.shop_id).await {
+        Ok(Some(owner)) if owner.merchant_id.trim() == ours => {}
+        _ => {
+            worker::console_warn!(
+                "beam webhook {event}: charge {} is not this merchant's payment",
+                charge.charge_id
+            );
+            return Ok(StatusCode::OK);
+        }
+    }
     match charge.status.as_str() {
         "SUCCEEDED" if charge.currency.as_deref() == Some("THB") => {
             settle(env, &p.id, charge.amount).await?;

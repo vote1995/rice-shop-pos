@@ -111,6 +111,8 @@ pub async fn staff_menu(
         "option_groups": option_groups,
         "options": options,
         "channel_markup": channel_markup,
+        // false: this shop has no Beam credentials, the POS hides the QR option
+        "beam_qr": crate::routes::promptpay::qr_available(env, &shop_id).await,
     })))
 }
 

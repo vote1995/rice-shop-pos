@@ -1285,6 +1285,7 @@ export default function Counter({
           order={payFor}
           busy={busy}
           result={payResult}
+          qrAvailable={menu?.beam_qr !== false}
           onClose={() => {
             setPayFor(null)
             setPayResult(null)
@@ -2008,6 +2009,7 @@ function PaySheet({
   order,
   busy,
   result,
+  qrAvailable,
   onClose,
   onCash,
   onApp,
@@ -2017,6 +2019,8 @@ function PaySheet({
 }: {
   order: Order
   busy: boolean
+  /** false = this shop has no Beam credentials: cash only, no QR tab. */
+  qrAvailable: boolean
   result: PayResult | null
   onClose: () => void
   onCash: (paymentId: string, cashSatang: number) => void
@@ -2098,7 +2102,13 @@ function PaySheet({
           <span style={{ fontSize: 32, fontWeight: 700 }}>{baht(total)}</span>
         </div>
 
-        {counter ? (
+        {counter && !qrAvailable ? (
+          <p className="muted" style={{ margin: '4px 0' }}>
+            ร้านนี้ไม่มี Beam QR — รับเงินสดเท่านั้น
+          </p>
+        ) : null}
+
+        {counter && qrAvailable ? (
           <div className="pos-seg pos-pay-seg" role="group" aria-label="วิธีชำระเงิน">
             <button
               type="button"
@@ -2122,7 +2132,7 @@ function PaySheet({
           </div>
         ) : null}
 
-        {counter && qrOpened ? (
+        {counter && qrAvailable && qrOpened ? (
           <div hidden={mode !== 'qr'}>
           <BeamQr
             order={order}
