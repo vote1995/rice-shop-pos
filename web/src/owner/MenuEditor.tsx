@@ -101,6 +101,19 @@ function markupFormFrom(data: MenuData | null): MarkupFormState {
 
 // PUT /api/owner/menu-items/{id} replaces ALL mutable fields — build the full
 // body from the current row and override only what this screen edits.
+/** The หมวด (type) a menu is grouped under (owner side only). A menu that was never
+ *  given one is its own หมวด: the menu's name stands in for it. */
+function catOf(it: MenuItem): string {
+  const c = it.category.trim()
+  return c === '' ? it.name.trim() : c
+}
+
+/** The หมวด the owner actually chose; '' = none chosen (the name stands in). */
+function chosenCat(it: MenuItem): string {
+  const c = it.category.trim()
+  return c === it.name.trim() ? '' : c
+}
+
 function itemPutBody(it: MenuItem, over: Record<string, unknown>): Record<string, unknown> {
   return {
     name: it.name,
@@ -322,6 +335,105 @@ export default function MenuEditor() {
     }
   }
 
+  // ---- หมวด (type) layer: owner-side grouping only (menu_items.category) ----
+  const [qaCat, setQaCat] = useState('')
+  const [qaName, setQaName] = useState('')
+  const [qaPrice, setQaPrice] = useState('')
+  const [qaCopy, setQaCopy] = useState(true)
+  const [qaBusy, setQaBusy] = useState(false)
+  const [qaMsg, setQaMsg] = useState<{ text: string; bad: boolean } | null>(null)
+  const qaNameRef = useRef<HTMLInputElement | null>(null)
+
+  /** The menu items of one หมวด, in menu order. */
+  function itemsOfCategory(cat: string): MenuItem[] {
+    const c = cat.trim().toLowerCase()
+    if (c === '') return []
+    return (data?.items ?? []).filter((i) => catOf(i).toLowerCase() === c)
+  }
+
+  /** The template for a new menu of this หมวด: the latest one that already has option lists. */
+  function templateFor(cat: string): MenuItem | null {
+    const withLists = itemsOfCategory(cat).filter((i) =>
+      (data?.option_groups ?? []).some((g) => g.menu_item_id === i.id && !g.tier_pricing),
+    )
+    return withLists.length > 0 ? withLists[withLists.length - 1] : null
+  }
+
+  /** Copy every list (and its choices) of `src` onto `target` — same shape as the template sheet. */
+  async function copyListsFrom(src: MenuItem, target: MenuItem) {
+    if (!data || !shopId) return
+    const groups = data.option_groups.filter((g) => g.menu_item_id === src.id && !g.tier_pricing)
+    for (const sg of groups) {
+      const g = await api<OptionGroup>('POST', '/api/owner/option-groups', {
+        id: crypto.randomUUID(),
+        shop_id: shopId,
+        menu_item_id: target.id,
+        name: sg.name,
+        required: sg.required,
+        max_select: sg.max_select,
+        tier_pricing: false,
+        sort_order: sg.sort_order,
+      })
+      upsertGroup(g)
+      for (const so of data.options.filter((o) => o.option_group_id === sg.id)) {
+        upsertOption(
+          await api<MenuOption>('POST', '/api/owner/options', {
+            id: crypto.randomUUID(),
+            option_group_id: g.id,
+            name: so.name,
+            price_add: so.price_add,
+            sort_order: so.sort_order,
+          }),
+        )
+      }
+    }
+  }
+
+  async function quickAdd() {
+    if (!shopId || !data || qaBusy) return
+    const cat = qaCat.trim()
+    const name = qaName.trim()
+    if (name === '') return setQaMsg({ text: 'กรอกชื่อเมนูก่อน', bad: true })
+    const price = bahtToSatang(qaPrice)
+    if (price === 'invalid') return setQaMsg({ text: 'ราคาไม่ถูกต้อง', bad: true })
+    setQaBusy(true)
+    setQaMsg(null)
+    try {
+      const tpl = qaCopy ? templateFor(cat) : null
+      const item = await api<MenuItem>('POST', '/api/owner/menu-items', {
+        id: crypto.randomUUID(),
+        shop_id: shopId,
+        name,
+        category: cat === '' ? name : cat, // no หมวด = category equals the name (the legacy default)
+        menu_type: 'made_to_order',
+        base_price: price ?? 0,
+        price_2: null,
+        price_3: null,
+        grab_price: null,
+        lineman_price: null,
+        foodpanda_price: null,
+        cost: null,
+        sort_order: null,
+      })
+      upsertItem(item)
+      if (tpl !== null) await copyListsFrom(tpl, item)
+      setQaMsg({
+        text:
+          `เพิ่ม "${name}"${cat === '' ? '' : ` ในหมวด "${cat}"`}แล้ว` +
+          (tpl !== null ? ` · คัดลอกตัวเลือกจาก "${tpl.name}"` : ''),
+        bad: false,
+      })
+      // keep the หมวด for the next menu of the same หมวด; clear the rest
+      setQaName('')
+      setQaPrice('')
+      qaNameRef.current?.focus()
+    } catch (e) {
+      setQaMsg({ text: friendlyError(e), bad: true })
+    } finally {
+      setQaBusy(false)
+    }
+  }
+
   // "+ เพิ่มประเภท": item ประเภทใหม่ (base 0) + one pick-one list "เมนู".
   async function addType() {
     if (!shopId) return
@@ -525,6 +637,13 @@ export default function MenuEditor() {
   // ---- derived rows (server order kept: sort_order, created_at, id) ----
 
   const items = data ? data.items : []
+  /** หมวด the owner chose, in menu order (the datalists suggest these) */
+  const categories = Array.from(new Set(items.map(chosenCat).filter((c) => c !== '')))
+  /** the list view: one block per หมวด (a menu with none is grouped under its own name) */
+  const catGroups: { label: string; items: MenuItem[] }[] = Array.from(new Set(items.map(catOf))).map((c) => ({
+    label: c,
+    items: items.filter((i) => catOf(i) === c),
+  }))
   /** Lists of one item: attached to it, not shop-wide, not tier-pricing. */
   const listsOf = (itemId: string) =>
     data ? data.option_groups.filter((g) => g.menu_item_id === itemId && !g.tier_pricing) : []
@@ -569,13 +688,30 @@ export default function MenuEditor() {
           ) : null}
         </div>
 
+        <label>
+          หมวด (type — พิมพ์เอง ไม่เลือก = ใช้ชื่อเมนูเป็นหมวด)
+          <AutoText
+            value={chosenCat(it)}
+            list="menu-categories"
+            placeholder="ไม่เลือก = ใช้ชื่อเมนูเป็นหมวด"
+            ariaLabel="หมวด"
+            onCommit={(v) => saveItemFields(it, { category: v.trim() === '' ? it.name : v.trim() })}
+            allowEmpty
+          />
+          <datalist id="menu-categories">
+            {categories.map((c) => (
+              <option key={c} value={c} />
+            ))}
+          </datalist>
+        </label>
+
         <div className="row">
           <label className="grow">
             ชื่อเมนู
             <AutoText
               value={it.name}
               placeholder="เช่น ก๋วยเตี๋ยว"
-              onCommit={(v) => saveItemFields(it, { name: v })}
+              onCommit={(v) => saveItemFields(it, chosenCat(it) === '' ? { name: v, category: v } : { name: v })}
               onEmpty={() => flash('กรอกชื่อเมนูก่อน', true)}
             />
           </label>
@@ -765,42 +901,121 @@ export default function MenuEditor() {
       </div>
       <p className="muted small">ประเภท = ปุ่มใหญ่ที่พนักงานกดก่อน แล้วค่อยติ๊กตัวเลือกข้างใน</p>
 
+      {shopId && data ? (
+        <form
+          className="card"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void quickAdd()
+          }}
+        >
+          <h2>เพิ่มเมนูแบบเร็ว</h2>
+          <label>
+            หมวด (type — พิมพ์เอง ไม่ใส่ = ใช้ชื่อเมนูเป็นหมวด)
+            <input
+              value={qaCat}
+              list="menu-categories"
+              placeholder="เช่น ข้าว, ก๋วยเตี๋ยว"
+              maxLength={60}
+              disabled={qaBusy}
+              onChange={(e) => setQaCat(e.target.value)}
+            />
+            <datalist id="menu-categories">
+              {categories.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
+          </label>
+          <label>
+            ชื่อเมนู
+            <input
+              ref={qaNameRef}
+              value={qaName}
+              placeholder="เช่น หมูแดง"
+              maxLength={60}
+              disabled={qaBusy}
+              onChange={(e) => setQaName(e.target.value)}
+            />
+          </label>
+          <label>
+            ราคา (บาท)
+            <input
+              value={qaPrice}
+              inputMode="decimal"
+              placeholder="0"
+              disabled={qaBusy}
+              onChange={(e) => setQaPrice(e.target.value)}
+            />
+          </label>
+          {templateFor(qaCat) ? (
+            <label className="row" style={{ gap: 8, alignItems: 'center' }}>
+              <input
+                type="checkbox"
+                checked={qaCopy}
+                disabled={qaBusy}
+                onChange={(e) => setQaCopy(e.target.checked)}
+                style={{ width: 'auto', flex: 'none' }}
+              />
+              <span>คัดลอกตัวเลือกจาก "{templateFor(qaCat)?.name}" (เมนูอื่นในหมวดนี้)</span>
+            </label>
+          ) : null}
+          {qaMsg ? (
+            <p className={qaMsg.bad ? 'error small' : 'muted small'} role={qaMsg.bad ? 'alert' : 'status'}>
+              {qaMsg.text}
+            </p>
+          ) : null}
+          <button className="btn primary" type="submit" disabled={qaBusy}>
+            {qaBusy ? 'กำลังเพิ่ม…' : 'เพิ่มเมนู'}
+          </button>
+        </form>
+      ) : null}
+
       {shopId && !data && !msg ? <p className="muted">กำลังโหลดเมนู…</p> : null}
 
-      <div className="list">
-        {items.map((it) => (
-          <div className={`item ${it.status === 'active' ? 'ok-item' : ''}`} key={it.id}>
-            <button type="button" style={CARD_TAP} onClick={() => setEditId(it.id)} aria-label={`แก้ไขประเภท ${it.name}`}>
-              <span style={{ display: 'flex', width: '100%', alignItems: 'baseline', gap: 8 }}>
-                <strong
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    fontSize: '1.05rem',
-                    textAlign: 'left',
-                    color: it.status === 'active' ? undefined : 'var(--muted)',
-                  }}
-                >
-                  {it.name}
-                </strong>
-                <span className="muted small">{baseLabel(it)}</span>
-              </span>
-              <span className="muted small">{listsSummary(it)}</span>
-            </button>
-            <div className="row">
-              <span className={`badge ${it.status === 'active' ? 'approved' : 'revoked'}`}>
-                {it.status === 'active' ? 'เปิดขาย' : 'ปิดขาย'}
-              </span>
-              <span className="grow" />
-              <Switch
-                checked={it.status === 'active'}
-                label={`${it.status === 'active' ? 'ปิดขาย' : 'เปิดขาย'} ${it.name}`}
-                onChange={() => void toggleStatus(it)}
-              />
+      {catGroups.map((g) => (
+        <div key={g.label || '__none'}>
+          {g.items.length === 1 && g.items[0].name.trim() === g.label ? null : (
+            <h3 className="muted" style={{ margin: '12px 0 6px' }}>
+              {g.label}
+            </h3>
+          )}
+          <div className="list">
+          {g.items.map((it) => (
+            <div className={`item ${it.status === 'active' ? 'ok-item' : ''}`} key={it.id}>
+              <button type="button" style={CARD_TAP} onClick={() => setEditId(it.id)} aria-label={`แก้ไขประเภท ${it.name}`}>
+                <span style={{ display: 'flex', width: '100%', alignItems: 'baseline', gap: 8 }}>
+                  <strong
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      fontSize: '1.05rem',
+                      textAlign: 'left',
+                      color: it.status === 'active' ? undefined : 'var(--muted)',
+                    }}
+                  >
+                    {it.name}
+                  </strong>
+                  <span className="muted small">{baseLabel(it)}</span>
+                </span>
+                <span className="muted small">{listsSummary(it)}</span>
+              </button>
+              <div className="row">
+                <span className={`badge ${it.status === 'active' ? 'approved' : 'revoked'}`}>
+                  {it.status === 'active' ? 'เปิดขาย' : 'ปิดขาย'}
+                </span>
+                <span className="grow" />
+                <Switch
+                  checked={it.status === 'active'}
+                  label={`${it.status === 'active' ? 'ปิดขาย' : 'เปิดขาย'} ${it.name}`}
+                  onChange={() => void toggleStatus(it)}
+                />
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+  
+        </div>
+      ))}
       {data && items.length === 0 ? <p className="muted">ยังไม่มีประเภท — กด "+ เพิ่มประเภท" เพื่อเริ่ม</p> : null}
 
       <button className="btn primary" disabled={busy || !shopId} onClick={() => void addType()}>
@@ -1085,7 +1300,13 @@ function AutoText({
   ariaLabel,
   style,
   selectOnMount,
+  list,
+  allowEmpty,
 }: {
+  /** id of a <datalist> for typed suggestions. */
+  list?: string
+  /** an empty value is a valid commit (optional field). */
+  allowEmpty?: boolean
   value: string
   onCommit: (v: string) => Promise<boolean> | boolean
   /** name cleared: report + revert without hitting the API. */
@@ -1116,7 +1337,7 @@ function AutoText({
       setT(value)
       return
     }
-    if (next === '') {
+    if (next === '' && !allowEmpty) {
       onEmpty?.()
       setT(value)
       return
@@ -1134,6 +1355,7 @@ function AutoText({
     <input
       ref={ref}
       value={t}
+      list={list}
       aria-label={ariaLabel}
       placeholder={placeholder}
       style={style}
