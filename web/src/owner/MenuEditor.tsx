@@ -101,6 +101,19 @@ function markupFormFrom(data: MenuData | null): MarkupFormState {
 
 // PUT /api/owner/menu-items/{id} replaces ALL mutable fields — build the full
 // body from the current row and override only what this screen edits.
+/** The หมวด (type) a menu is grouped under (owner side only). A menu that was never
+ *  given one is its own หมวด: the menu's name stands in for it. */
+function catOf(it: MenuItem): string {
+  const c = it.category.trim()
+  return c === '' ? it.name.trim() : c
+}
+
+/** The หมวด the owner actually chose; '' = none chosen (the name stands in). */
+function chosenCat(it: MenuItem): string {
+  const c = it.category.trim()
+  return c === it.name.trim() ? '' : c
+}
+
 function itemPutBody(it: MenuItem, over: Record<string, unknown>): Record<string, unknown> {
   return {
     name: it.name,
@@ -525,6 +538,13 @@ export default function MenuEditor() {
   // ---- derived rows (server order kept: sort_order, created_at, id) ----
 
   const items = data ? data.items : []
+  /** หมวด the owner chose, in menu order (the datalists suggest these) */
+  const categories = Array.from(new Set(items.map(chosenCat).filter((c) => c !== '')))
+  /** the list view: one block per หมวด (a menu with none is grouped under its own name) */
+  const catGroups: { label: string; items: MenuItem[] }[] = Array.from(new Set(items.map(catOf))).map((c) => ({
+    label: c,
+    items: items.filter((i) => catOf(i) === c),
+  }))
   /** Lists of one item: attached to it, not shop-wide, not tier-pricing. */
   const listsOf = (itemId: string) =>
     data ? data.option_groups.filter((g) => g.menu_item_id === itemId && !g.tier_pricing) : []
@@ -569,13 +589,30 @@ export default function MenuEditor() {
           ) : null}
         </div>
 
+        <label>
+          หมวด (type — พิมพ์เอง ไม่เลือก = ใช้ชื่อเมนูเป็นหมวด)
+          <AutoText
+            value={chosenCat(it)}
+            list="menu-categories"
+            placeholder="ไม่เลือก = ใช้ชื่อเมนูเป็นหมวด"
+            ariaLabel="หมวด"
+            onCommit={(v) => saveItemFields(it, { category: v.trim() === '' ? it.name : v.trim() })}
+            allowEmpty
+          />
+          <datalist id="menu-categories">
+            {categories.map((c) => (
+              <option key={c} value={c} />
+            ))}
+          </datalist>
+        </label>
+
         <div className="row">
           <label className="grow">
             ชื่อเมนู
             <AutoText
               value={it.name}
               placeholder="เช่น ก๋วยเตี๋ยว"
-              onCommit={(v) => saveItemFields(it, { name: v })}
+              onCommit={(v) => saveItemFields(it, chosenCat(it) === '' ? { name: v, category: v } : { name: v })}
               onEmpty={() => flash('กรอกชื่อเมนูก่อน', true)}
             />
           </label>
@@ -767,40 +804,50 @@ export default function MenuEditor() {
 
       {shopId && !data && !msg ? <p className="muted">กำลังโหลดเมนู…</p> : null}
 
-      <div className="list">
-        {items.map((it) => (
-          <div className={`item ${it.status === 'active' ? 'ok-item' : ''}`} key={it.id}>
-            <button type="button" style={CARD_TAP} onClick={() => setEditId(it.id)} aria-label={`แก้ไขประเภท ${it.name}`}>
-              <span style={{ display: 'flex', width: '100%', alignItems: 'baseline', gap: 8 }}>
-                <strong
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    fontSize: '1.05rem',
-                    textAlign: 'left',
-                    color: it.status === 'active' ? undefined : 'var(--muted)',
-                  }}
-                >
-                  {it.name}
-                </strong>
-                <span className="muted small">{baseLabel(it)}</span>
-              </span>
-              <span className="muted small">{listsSummary(it)}</span>
-            </button>
-            <div className="row">
-              <span className={`badge ${it.status === 'active' ? 'approved' : 'revoked'}`}>
-                {it.status === 'active' ? 'เปิดขาย' : 'ปิดขาย'}
-              </span>
-              <span className="grow" />
-              <Switch
-                checked={it.status === 'active'}
-                label={`${it.status === 'active' ? 'ปิดขาย' : 'เปิดขาย'} ${it.name}`}
-                onChange={() => void toggleStatus(it)}
-              />
+      {catGroups.map((g) => (
+        <div key={g.label || '__none'}>
+          {g.items.length === 1 && g.items[0].name.trim() === g.label ? null : (
+            <h3 className="muted" style={{ margin: '12px 0 6px' }}>
+              {g.label}
+            </h3>
+          )}
+          <div className="list">
+          {g.items.map((it) => (
+            <div className={`item ${it.status === 'active' ? 'ok-item' : ''}`} key={it.id}>
+              <button type="button" style={CARD_TAP} onClick={() => setEditId(it.id)} aria-label={`แก้ไขประเภท ${it.name}`}>
+                <span style={{ display: 'flex', width: '100%', alignItems: 'baseline', gap: 8 }}>
+                  <strong
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      fontSize: '1.05rem',
+                      textAlign: 'left',
+                      color: it.status === 'active' ? undefined : 'var(--muted)',
+                    }}
+                  >
+                    {it.name}
+                  </strong>
+                  <span className="muted small">{baseLabel(it)}</span>
+                </span>
+                <span className="muted small">{listsSummary(it)}</span>
+              </button>
+              <div className="row">
+                <span className={`badge ${it.status === 'active' ? 'approved' : 'revoked'}`}>
+                  {it.status === 'active' ? 'เปิดขาย' : 'ปิดขาย'}
+                </span>
+                <span className="grow" />
+                <Switch
+                  checked={it.status === 'active'}
+                  label={`${it.status === 'active' ? 'ปิดขาย' : 'เปิดขาย'} ${it.name}`}
+                  onChange={() => void toggleStatus(it)}
+                />
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+  
+        </div>
+      ))}
       {data && items.length === 0 ? <p className="muted">ยังไม่มีประเภท — กด "+ เพิ่มประเภท" เพื่อเริ่ม</p> : null}
 
       <button className="btn primary" disabled={busy || !shopId} onClick={() => void addType()}>
@@ -1085,7 +1132,13 @@ function AutoText({
   ariaLabel,
   style,
   selectOnMount,
+  list,
+  allowEmpty,
 }: {
+  /** id of a <datalist> for typed suggestions. */
+  list?: string
+  /** an empty value is a valid commit (optional field). */
+  allowEmpty?: boolean
   value: string
   onCommit: (v: string) => Promise<boolean> | boolean
   /** name cleared: report + revert without hitting the API. */
@@ -1116,7 +1169,7 @@ function AutoText({
       setT(value)
       return
     }
-    if (next === '') {
+    if (next === '' && !allowEmpty) {
       onEmpty?.()
       setT(value)
       return
@@ -1134,6 +1187,7 @@ function AutoText({
     <input
       ref={ref}
       value={t}
+      list={list}
       aria-label={ariaLabel}
       placeholder={placeholder}
       style={style}
