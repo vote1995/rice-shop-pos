@@ -1755,4 +1755,5 @@ body:has(.join) { background: #f6f6f7; }
 .menu-editor label { font-size: 1.05rem; font-weight: 800; }
 .menu-editor label input, .menu-editor label select { font-weight: 400; }
 .menu-editor .item > button strong { color: var(--text); }
-.menu-editor .col-head, .menu-editor .muted.col-head { color: var(--text); font-size: 1rem; font-weight: 800; }
+.menu-editor label.label-accent { color: var(--accent); }
+.menu-editor .col-head, .menu-editor .muted.col-head { color: var(--accent); font-size: 1rem; font-weight: 800; }

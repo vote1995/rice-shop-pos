@@ -589,7 +589,7 @@ export default function MenuEditor() {
           ) : null}
         </div>
 
-        <label>
+        <label className="label-accent">
           หมวด (type — พิมพ์เอง ไม่เลือก = ใช้ชื่อเมนูเป็นหมวด)
           <AutoText
             value={chosenCat(it)}
