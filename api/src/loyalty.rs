@@ -301,9 +301,23 @@ fn erase_statements_for(
             "DELETE FROM point_ledger WHERE customer_id IN ({scope})"
         ))
         .bind(params)?,
+        // OPEN bills lose the member AND the redemption, and are priced again
+        // WITHOUT the points discount (the same total formula add_items/set_member
+        // use) — otherwise the bill would keep a discount whose points are never taken.
         d1.prepare(format!(
-            "UPDATE orders SET customer_id = NULL, points_redeemed = 0
-             WHERE customer_id IN ({scope})"
+            "UPDATE orders
+             SET customer_id = NULL, points_redeemed = 0,
+                 total_amount = MAX(0, (SELECT COALESCE(SUM(line_total), 0)
+                                        FROM order_items WHERE order_id = orders.id)
+                                       - discount_amount)
+             WHERE status IN ('preparing', 'served') AND customer_id IN ({scope})"
+        ))
+        .bind(params)?,
+        // Every other bill (paid / cancelled) only loses the link to the person:
+        // points_redeemed is not personal data and keeps the old bill reconcilable
+        // (total = lines - discount - points*100).
+        d1.prepare(format!(
+            "UPDATE orders SET customer_id = NULL WHERE customer_id IN ({scope})"
         ))
         .bind(params)?,
         d1.prepare(format!("DELETE FROM customers WHERE id IN ({scope})"))

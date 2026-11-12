@@ -523,7 +523,9 @@ pub async fn set_member(
                                         FROM order_items WHERE order_id = ?3)
                                        - discount_amount - ?2 * 100),
                  updated_at = ?4
-             WHERE id = ?3 AND shop_id = ?5 AND status IN ('preparing', 'served')",
+             WHERE id = ?3 AND shop_id = ?5 AND status IN ('preparing', 'served')
+               AND NOT EXISTS (SELECT 1 FROM payments
+                               WHERE order_id = ?3 AND method = 'promptpay' AND status = 'pending')",
         )
         .bind(&[
             opt_txt(customer_id.as_deref()),
@@ -535,6 +537,14 @@ pub async fn set_member(
         .run()
         .await?;
     if changes(&result)? == 0 {
+        // a QR created between the check above and this UPDATE is the other way to lose the race
+        if has_pending_qr(env, &order_id).await? {
+            return Err(ApiError::coded(
+                StatusCode::CONFLICT,
+                "qr_pending",
+                "a PromptPay QR is pending on this bill — let it finish or expire                  before changing the member",
+            ));
+        }
         return Err(transition_refused(env, &shop_id, &order_id).await);
     }
 
