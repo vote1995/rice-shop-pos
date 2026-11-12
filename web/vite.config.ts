@@ -12,9 +12,9 @@ export default defineConfig({
       // from <head> before main.tsx and would re-install the SW on owner.*,
       // where it must stay off (Access 302s block SW updates → stale UI).
       injectRegister: false,
-      includeAssets: ['icon.svg'],
+      includeAssets: ['favicon-48.png', 'apple-touch-icon.png'],
       manifest: {
-        name: 'POS ร้านข้าว',
+        name: 'WvY POS',
         short_name: 'POS',
         description: 'ระบบขายหน้าร้านสำหรับร้านข้าว',
         lang: 'th',
@@ -25,13 +25,10 @@ export default defineConfig({
         theme_color: '#2e7d32',
         background_color: '#ffffff',
         icons: [
-          { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
-          { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
-          // PNG raster fallbacks (generated from icon.svg) for installers and
-          // launchers that ignore SVG (Android adaptive-icon pipeline).
           { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
           { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-          { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          // artwork kept inside the central 80% so launcher masks do not crop it
+          { src: '/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
       workbox: {

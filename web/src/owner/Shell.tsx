@@ -463,11 +463,9 @@ export function Shell({
       <aside className="sidebar" aria-label="เมนูเจ้าของร้าน">
         <div className="side-brand">
           <span className="brand-row">
-            <span className="brand-logo" aria-hidden="true">
-              ร
-            </span>
+            <img className="brand-logo" src="/logo.png" alt="" width={36} height={36} />
             <span className="brand-name">
-              POS ร้านข้าว
+              WvY POS
               <small>แดชบอร์ดเจ้าของร้าน</small>
             </span>
           </span>

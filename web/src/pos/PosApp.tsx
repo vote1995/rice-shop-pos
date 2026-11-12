@@ -79,28 +79,6 @@ function usePosTheme(): { choice: ThemeChoice; resolved: 'light' | 'dark'; cycle
   }
 }
 
-/** The rice-bowl glyph of the auth brand mark (decorative, no icon library). */
-function RiceBowl() {
-  return (
-    <svg
-      width={26}
-      height={26}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.75}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path d="M3.5 12h17c0 4.7-3.8 8.5-8.5 8.5S3.5 16.7 3.5 12z" />
-      <path d="M9 9V6" />
-      <path d="M12.5 9V4.5" />
-      <path d="M16 9V6" />
-    </svg>
-  )
-}
 
 function shortId(id: string | null | undefined): string {
   return id ? id.slice(0, 8).toUpperCase() : '-'
@@ -361,9 +339,9 @@ export default function PosApp() {
           <div className="pos-auth-card">
             <div className="pos-auth-brand">
               <span className="pos-auth-mark" aria-hidden="true">
-                <RiceBowl />
+                <img src="/logo.png" alt="" width={40} height={40} />
               </span>
-              <h1 className="pos-auth-title">POS ร้านข้าว</h1>
+              <h1 className="pos-auth-title">WvY POS</h1>
               {shopName ? <p className="pos-auth-shop muted">ร้าน {shopName}</p> : null}
             </div>
             <div className="pos-auth-fields center">
@@ -388,9 +366,9 @@ export default function PosApp() {
           <form className="pos-auth-card" onSubmit={registerDevice}>
             <div className="pos-auth-brand">
               <span className="pos-auth-mark" aria-hidden="true">
-                <RiceBowl />
+                <img src="/logo.png" alt="" width={40} height={40} />
               </span>
-              <h1 className="pos-auth-title">POS ร้านข้าว</h1>
+              <h1 className="pos-auth-title">WvY POS</h1>
               {shopName ? <p className="pos-auth-shop muted">ร้าน {shopName}</p> : null}
             </div>
             <div className="pos-auth-fields">
@@ -428,9 +406,9 @@ export default function PosApp() {
           <div className="pos-auth-card">
             <div className="pos-auth-brand">
               <span className="pos-auth-mark" aria-hidden="true">
-                <RiceBowl />
+                <img src="/logo.png" alt="" width={40} height={40} />
               </span>
-              <h1 className="pos-auth-title">POS ร้านข้าว</h1>
+              <h1 className="pos-auth-title">WvY POS</h1>
               {shopName ? <p className="pos-auth-shop muted">ร้าน {shopName}</p> : null}
             </div>
             <div className="pos-auth-fields center">
@@ -459,9 +437,9 @@ export default function PosApp() {
           <div className="pos-auth-card wide">
             <div className="pos-auth-brand">
               <span className="pos-auth-mark" aria-hidden="true">
-                <RiceBowl />
+                <img src="/logo.png" alt="" width={40} height={40} />
               </span>
-              <h1 className="pos-auth-title">POS ร้านข้าว</h1>
+              <h1 className="pos-auth-title">WvY POS</h1>
               {shopName ? <p className="pos-auth-shop muted">ร้าน {shopName}</p> : null}
             </div>
             <div className="pos-auth-fields">
@@ -577,7 +555,10 @@ export default function PosApp() {
               one kebab menu on the right — the theme switch, ล็อกจอ and
               ออกจากระบบ moved into the menu (unchanged handlers). */}
           <span className="pos-bar-id">
-            <span className="brand">POS ร้านข้าว</span>
+            <span className="brand">
+              <img className="brand-icon" src="/logo.png" alt="" width={24} height={24} />
+              WvY POS
+            </span>
             <span className="pos-bar-context">
               {shopName ? `ร้าน ${shopName} · ${me.name}` : me.name}
             </span>
