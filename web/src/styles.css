@@ -1748,10 +1748,11 @@ body:has(.join) { background: #f6f6f7; }
 .pos .pos-group-title { font-size: 1.05rem; font-weight: 800; color: var(--accent); }
 .pos .pos-choice-name { font-size: 1.2rem; font-weight: 800; line-height: 1.25; }
 
-/* ---- owner menu editor: bigger orange labels ---- */
-.menu-editor label { color: var(--accent); font-size: 1.05rem; font-weight: 800; }
+/* ---- owner menu editor: headings (h2/h3, every หมวด and card title) big + orange;
+        field labels / names / column heads keep the normal text colour, a bit bigger ---- */
+.menu-editor h2 { color: var(--accent); font-size: 1.5rem; }
+.menu-editor h3, .menu-editor h3.muted { color: var(--accent); font-size: 1.45rem; }
+.menu-editor label { font-size: 1.05rem; font-weight: 800; }
 .menu-editor label input, .menu-editor label select { font-weight: 400; }
-.menu-editor h2 { color: var(--accent); font-size: 1.3rem; }
-.menu-editor h3, .menu-editor h3.muted { color: var(--accent); font-size: 1.15rem; }
-.menu-editor .item > button strong { color: var(--accent); font-size: 1.25rem; }
-.menu-editor .col-head, .menu-editor .muted.col-head { color: var(--accent); font-size: 1rem; font-weight: 800; }
+.menu-editor .item > button strong { color: var(--text); }
+.menu-editor .col-head, .menu-editor .muted.col-head { color: var(--text); font-size: 1rem; font-weight: 800; }
