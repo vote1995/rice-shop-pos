@@ -702,6 +702,15 @@ export default function Counter({
   )
 
   const quick = !!type && !!menu && isQuickType(menu, type)
+  const quickTypeOf = useMemo(() => {
+    const m: Record<string, string> = {}
+    if (!menu) return m
+    for (const it of menu.items) {
+      if (!isQuickType(menu, it)) continue
+      for (const g of applicableGroups(menu, it)) for (const o of g.options) m[o.id] = it.name
+    }
+    return m
+  }, [menu])
 
   // changing the type starts a fresh plate
   useEffect(() => {
@@ -917,6 +926,14 @@ export default function Counter({
     }
     if (!pushLine(item, [opt.id])) return
     flash(`+1 ${opt.name}`)
+  }
+
+  /** QUICK type: take one of this choice back out of the cart (−1). */
+  function reduceQuickOption(item: MenuItem, opt: MenuOption) {
+    const line = cart.lines.find(
+      (l) => l.menu_item_id === item.id && l.option_ids.length === 1 && l.option_ids[0] === opt.id,
+    )
+    if (line) setLineQty(line.id, -1)
   }
 
   function addFromBuilder() {
@@ -1420,6 +1437,7 @@ export default function Counter({
           key={payFor.id}
           order={payFor}
           busy={busy}
+          quickTypeOf={quickTypeOf}
           result={payResult}
           qrAvailable={menu?.beam_qr !== false}
           onClose={() => {
@@ -1639,7 +1657,7 @@ export default function Counter({
     // a card: the name top-left, the price/"+฿x" bottom-right; a quick choice
     // also shows how many of it already sit in the cart as a "×n" badge
     const price = quick ? baht(optionPrice(type, o)) : o.price_add > 0 ? `+${fmtBaht(o.price_add)}` : ''
-    return (
+    const btn = (
       <LongPressButton
         key={o.id}
         className={`pos-choice${on || inCart > 0 ? ' on' : ''}${o.sold_out || o.stock_out ? ' soldout' : ''}`}
@@ -1657,6 +1675,23 @@ export default function Counter({
         ) : null}
         <span className="pos-choice-price">{price}</span>
       </LongPressButton>
+    )
+    if (!quick) return btn
+    // quick choices add +1 per tap, so give them a way back down (−1)
+    return (
+      <div key={o.id} className="pos-choice-wrap">
+        {btn}
+        {inCart > 0 ? (
+          <button
+            type="button"
+            className="pos-choice-minus"
+            aria-label={`ลด ${o.name}`}
+            onClick={() => reduceQuickOption(type, o)}
+          >
+            −
+          </button>
+        ) : null}
+      </div>
     )
   }
 
@@ -2137,6 +2172,72 @@ function CartSheet({
   )
 }
 
+/** What the price is made of: one row per line (qty, options, unit price,
+ *  line total), then discount and the grand total. Used by the pay sheet. */
+function OrderBreakdown({
+  order,
+  quickTypeOf,
+}: {
+  order: Order
+  /** option id -> name of the quick type it belongs to (เครื่องดื่ม …) */
+  quickTypeOf: Record<string, string>
+}) {
+  return (
+    <div className="pay-card" aria-label="รายละเอียดบิล">
+      <div className="pay-card-title">รายการ ({order.items.reduce((n, it) => n + it.quantity, 0)} จาน)</div>
+      <ul className="bl-lines">
+        {order.items.map((it) => {
+          const quickName = it.options.length === 1 && it.options[0].name === it.item_name
+          const opts = quickName ? [] : it.options
+          return (
+            <li key={it.id} className="bl-line">
+              <div className="bl-line-main">
+                <span className="bl-line-name">
+                  {it.quantity}× {it.item_name}
+                  {quickName && quickTypeOf[it.options[0].id] ? (
+                    <span className="bl-line-type"> · {quickTypeOf[it.options[0].id]}</span>
+                  ) : null}
+                </span>
+                <span className="bl-line-total">{baht(it.line_total)}</span>
+              </div>
+              {opts.map((o) => (
+                <div key={o.id} className="bl-line-sub">
+                  <span>· {o.name}</span>
+                  <span>{o.price_add > 0 ? `+${fmtBaht(o.price_add)}` : ''}</span>
+                </div>
+              ))}
+              {it.note ? <div className="bl-line-sub">หมายเหตุ: {it.note}</div> : null}
+              {it.quantity > 1 ? (
+                <div className="bl-line-sub">
+                  <span>
+                    {baht(it.unit_price)} × {it.quantity}
+                  </span>
+                </div>
+              ) : null}
+              {it.discount_amount > 0 ? (
+                <div className="bl-line-sub">
+                  <span>ส่วนลด</span>
+                  <span>−{baht(it.discount_amount)}</span>
+                </div>
+              ) : null}
+            </li>
+          )
+        })}
+      </ul>
+      {order.discount_amount > 0 ? (
+        <div className="pay-sum-row">
+          <span>ส่วนลดบิล</span>
+          <span>−{baht(order.discount_amount)}</span>
+        </div>
+      ) : null}
+      <div className="pay-sum-row pay-sum-total">
+        <span>ยอดรวม</span>
+        <span>{baht(order.total_amount)}</span>
+      </div>
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Pay sheet: one tap closes a cash bill; delivery is settled in the app
 // ---------------------------------------------------------------------------
@@ -2146,6 +2247,7 @@ function PaySheet({
   busy,
   result,
   qrAvailable,
+  quickTypeOf,
   onClose,
   onCash,
   onApp,
@@ -2157,6 +2259,7 @@ function PaySheet({
   busy: boolean
   /** false = this shop has no Beam credentials: cash only, no QR tab. */
   qrAvailable: boolean
+  quickTypeOf: Record<string, string>
   result: PayResult | null
   onClose: () => void
   onCash: (paymentId: string, cashSatang: number) => void
@@ -2228,15 +2331,19 @@ function PaySheet({
   return (
     <div className="sheet-backdrop" onClick={onClose}>
       <div
-        className="sheet"
+        className="sheet pay-sheet"
         role="dialog"
         aria-label="รับเงิน"
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-          <span style={{ fontSize: 18, fontWeight: 600, flex: 1 }}>รับเงิน คิว #{order.queue_number}</span>
-          <span style={{ fontSize: 32, fontWeight: 700 }}>{baht(total)}</span>
+        <div className="pay-head">
+          <span style={{ fontSize: 17, fontWeight: 600, flex: 1 }}>รับเงิน คิว #{order.queue_number}</span>
+          <span style={{ fontSize: 26, fontWeight: 700 }}>{baht(total)}</span>
         </div>
+        <div className="pay-scroll">
+        <OrderBreakdown order={order} quickTypeOf={quickTypeOf} />
+        <div className="pay-card">
+        <div className="pay-card-title">ชำระเงิน</div>
 
         {counter && !qrAvailable ? (
           <p className="muted" style={{ margin: '4px 0' }}>
@@ -2301,10 +2408,10 @@ function PaySheet({
                   key={v}
                   disabled={busy}
                   style={{
-                    height: 62,
-                    minHeight: 62,
-                    borderRadius: 14,
-                    fontSize: 20,
+                    height: 44,
+                    minHeight: 44,
+                    borderRadius: 12,
+                    fontSize: 16,
                     fontWeight: 700,
                     padding: 0,
                     border: `1.5px solid ${GREEN}`,
@@ -2350,15 +2457,17 @@ function PaySheet({
         ) : (
           <button
             type="button"
-            style={{ ...S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN), height: 60, minHeight: 60, fontSize: 17 }}
+            style={{ ...S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN), height: 46, minHeight: 46, fontSize: 15 }}
             disabled={busy}
             onClick={() => onApp(paymentId)}
           >
             ลูกค้าจ่ายผ่าน {CHANNEL_LABEL[order.channel] ?? order.channel} แล้ว
           </button>
         )}
+        </div>
+        </div>
 
-        <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>
+        <button type="button" className="btn ghost pay-close" onClick={onClose} disabled={busy}>
           ปิด
         </button>
       </div>

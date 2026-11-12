@@ -1078,6 +1078,14 @@ body:has(.pos[data-theme="dark"]) { background: #0f1012; }
   background: var(--accent-soft); color: var(--accent-strong);
   font-size: 0.78rem; font-weight: 800;
 }
+.pos .pos-choice-wrap { position: relative; display: flex; }
+.pos .pos-choice-wrap > .pos-choice { flex: 1; min-width: 0; }
+.pos .pos-choice-minus {
+  position: absolute; left: 8px; bottom: 8px; width: 28px; height: 28px; padding: 0; min-width: 0; min-height: 0; flex: none; aspect-ratio: 1;
+  display: grid; place-items: center; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  font-size: 1.1rem; font-weight: 800; line-height: 1; touch-action: manipulation;
+}
 .pos .pos-choice.on .pos-choice-badge { background: rgba(255, 255, 255, 0.24); color: inherit; }
 
 /* ---- phone: the cart is a bottom bar; wide: the docked panel below ---- */
@@ -1121,7 +1129,7 @@ body:has(.pos[data-theme="dark"]) { background: #0f1012; }
 .pos .pos-line-qty { display: flex; align-items: center; gap: 8px; }
 .pos .pos-line-qty button {
   width: 38px; min-width: 38px; height: 38px; min-height: 38px; padding: 0;
-  display: grid; place-items: center; border-radius: 10px;
+  display: grid; place-items: center; border-radius: 50%;
   background: var(--surface-2); font-size: 1.1rem; font-weight: 700;
 }
 .pos .pos-line-qty span { min-width: 20px; text-align: center; font-size: 1rem; font-weight: 800; }
@@ -1498,3 +1506,32 @@ body:has(.pos[data-theme="dark"]) { background: #0f1012; }
   padding-left: 30px;
 }
 .tpl-opt .price { flex: none; font-variant-numeric: tabular-nums; }
+
+/* ---- pay sheet: fixed head, scrolling body split into cards, fixed close ---- */
+.sheet.pay-sheet { max-height: 92dvh; overflow: hidden; gap: 8px; }
+.pay-sheet .pay-head {
+  display: flex; align-items: baseline; gap: 8px; flex: none;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.pay-sheet .pay-scroll {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.pay-sheet .pay-close { flex: none; min-height: 40px; }
+.pay-card {
+  border: 1px solid var(--border); border-radius: 14px; padding: 10px 12px;
+  background: var(--surface); display: flex; flex-direction: column; gap: 8px; flex: none;
+}
+.pay-card-title { font-size: 0.8rem; font-weight: 700; color: var(--muted); letter-spacing: 0.02em; }
+.bl-lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.bl-line { display: flex; flex-direction: column; gap: 1px; padding-bottom: 8px; border-bottom: 1px dashed var(--border); }
+.bl-line:last-child { border-bottom: 0; padding-bottom: 0; }
+.bl-line-main { display: flex; justify-content: space-between; gap: 8px; font-size: 0.95rem; font-weight: 600; }
+.bl-line-name { min-width: 0; overflow-wrap: anywhere; }
+.bl-line-total, .pay-sum-row span:last-child { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bl-line-sub { display: flex; justify-content: space-between; gap: 8px; font-size: 0.82rem; color: var(--muted); padding-left: 10px; }
+.pay-sum-row { display: flex; justify-content: space-between; font-size: 0.9rem; color: var(--muted); }
+.pay-sum-total { font-size: 1.05rem; font-weight: 800; color: var(--text); border-top: 1px solid var(--border); padding-top: 8px; }
+.pay-sheet .pos-qr { gap: 6px; }
+.pay-sheet .pos-qr-amount { font-size: 1.4rem; }
+.bl-line-type { font-weight: 500; color: var(--muted); font-size: 0.85rem; }
