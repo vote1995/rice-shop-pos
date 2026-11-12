@@ -82,7 +82,7 @@ export function MembersPanel() {
 
   // Customers scan this QR on their own phones: it must point at the public POS host,
   // never at the Access-protected owner.* host (owner.x -> pos.x; dev/localhost unchanged).
-  const joinOrigin = `${window.location.protocol}//${window.location.host.replace(/^owner./, 'pos.')}`
+  const joinOrigin = `${window.location.protocol}//${window.location.host.replace(/^owner[.]/, 'pos.')}`
   const joinUrl = shopId !== '' ? `${joinOrigin}/join/${encodeURIComponent(shopId)}` : ''
 
   const load = useCallback(
