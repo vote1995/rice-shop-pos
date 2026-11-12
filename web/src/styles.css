@@ -1746,7 +1746,6 @@ body:has(.join) { background: #f6f6f7; }
 .pos .pos-cats .pos-type { color: var(--accent); font-size: 22px; opacity: 0.7; }
 .pos .pos-cats .pos-type.on { color: var(--accent); opacity: 1; border-bottom-color: var(--accent); }
 .pos .pos-group-title { font-size: 1.05rem; font-weight: 800; color: var(--accent); }
-.pos .pos-choice:not(.on) .pos-choice-name { color: var(--accent); }
 .pos .pos-choice-name { font-size: 1.2rem; font-weight: 800; line-height: 1.25; }
 
 /* ---- owner menu editor: bigger orange labels ---- */
