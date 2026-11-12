@@ -105,12 +105,11 @@ pub fn router(env: Env) -> Router {
         .route("/owner/ingredients/{id}/restock", post(routes::owner::stock::restock))
         .route("/owner/ingredients/{id}/count", post(routes::owner::stock::count))
         .route("/owner/recipe", put(routes::owner::stock::put_recipe))
-        // Owner order view, discounts, cancel, refunds (M1-4a).
+        // Owner order view, cancel, refunds (M1-4a).
         .route(
             "/owner/shops/{shop_id}/orders",
             get(routes::owner::orders::day_list),
         )
-        .route("/owner/orders/{id}/discount", post(routes::owner::orders::discount))
         .route("/owner/orders/{id}/cancel", post(routes::owner::orders::cancel))
         .route("/owner/payments/{id}/refund", post(routes::owner::orders::refund))
         .route(

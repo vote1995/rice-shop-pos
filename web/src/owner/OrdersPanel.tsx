@@ -1,5 +1,5 @@
 //! Owner "ออเดอร์" tab — the bills of one Bangkok sale day with the owner-only
-//! money actions (ROADMAP M1-4b; FEATURES 3.27-3.28, 3.47, 3.60).
+//! money actions (ROADMAP M1-4b; FEATURES 3.28, 3.47, 3.60).
 //!
 //! Patterns copied from MenuPanel: the shop select, ONE busy flag for the
 //! whole panel, `run()` (friendly Thai error + reload after every mutation,
@@ -8,10 +8,8 @@
 //! baht). Bangkok is UTC+7 all year, so every clock here is a fixed offset
 //! from UTC — exactly the math the server uses for the sale day.
 //!
-//! The discount form previews the new total with the SERVER's rules (line
-//! total = unit*qty - line discount, subtotal = sum of those, bill baht
-//! capped at the subtotal, percent floored to whole satang); the stored total
-//! is still the only authority.
+//! Existing discounts (old bills, staff meals) are still SHOWN read-only; the
+//! stored total is the only authority.
 
 import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
@@ -153,14 +151,7 @@ function fmtDayLabel(day: string): string {
 // Money / bill math (mirrors the server, which stores INTEGER satang)
 // ---------------------------------------------------------------------------
 
-/** '' -> 0 (no discount), anything unparsable -> 'invalid'. */
-function bahtOrZero(s: string): number | 'invalid' {
-  if (s.trim() === '') return 0
-  const v = bahtToSatang(s)
-  return v === null ? 'invalid' : v
-}
-
-/** An unpaid bill can still be discounted / cancelled (owner only). */
+/** An unpaid bill can still be cancelled (owner only). */
 function isUnpaid(o: Order): boolean {
   return o.status === 'preparing' || o.status === 'served'
 }
@@ -222,108 +213,6 @@ function summarize(orders: OwnerDayOrder[]): DaySummary {
   return summary
 }
 
-// ---- discount form draft (string inputs, satang math on submit) ----
-
-type BillKind = 'none' | 'baht' | 'percent'
-
-interface DiscountDraft {
-  /** order line id -> the new line discount in baht, as typed. */
-  lines: Record<string, string>
-  kind: BillKind
-  value: string
-}
-
-/**
- * Prefilled from the stored state: every line discount, and the bill discount
- * as BAHT when one is stored (the bill rows only keep the satang amount, never
- * the rule it came from).
- */
-function discountDraftFrom(order: Order): DiscountDraft {
-  const lines: Record<string, string> = {}
-  for (const it of order.items) lines[it.id] = fmtBaht(it.discount_amount)
-  const has = order.discount_amount > 0
-  return {
-    lines,
-    kind: has ? 'baht' : 'none',
-    value: has ? fmtBaht(order.discount_amount) : '',
-  }
-}
-
-interface DiscountPreview {
-  /** the satang to send per line (0 for a line left blank). */
-  lineAmounts: Record<string, number>
-  subtotal: number
-  billDiscount: number
-  billValue: number
-  total: number
-  error: string | null
-}
-
-/**
- * The new total, computed exactly like the server: line_total = unit*qty -
- * line discount, subtotal = sum of those, bill baht capped at the subtotal,
- * percent floored to whole satang, total = subtotal - bill discount.
- */
-function previewDiscount(order: Order, d: DiscountDraft): DiscountPreview {
-  const lineAmounts: Record<string, number> = {}
-  let error: string | null = null
-  let subtotal = 0
-  for (const it of order.items) {
-    const gross = it.unit_price * it.quantity
-    const v = bahtOrZero(d.lines[it.id] ?? '')
-    if (v === 'invalid') {
-      lineAmounts[it.id] = 0
-      subtotal += gross
-      if (error === null) error = `ส่วนลดของ "${it.item_name}" ไม่ใช่ตัวเลขบาทที่ถูกต้อง`
-      continue
-    }
-    if (v > gross) {
-      lineAmounts[it.id] = 0
-      subtotal += gross
-      if (error === null) {
-        error = `ส่วนลดของ "${it.item_name}" ต้องไม่เกิน ${fmtBaht(gross)} บาท`
-      }
-      continue
-    }
-    lineAmounts[it.id] = v
-    subtotal += gross - v
-  }
-
-  let billDiscount = 0
-  let billValue = 0
-  if (d.kind === 'baht') {
-    const v = bahtOrZero(d.value)
-    if (v === 'invalid') {
-      if (error === null) error = 'ส่วนลดทั้งบิล (บาท) ไม่ใช่ตัวเลขที่ถูกต้อง'
-    } else if (v > subtotal) {
-      if (error === null) {
-        error = `ส่วนลดทั้งบิลต้องไม่เกินยอดก่อนลด ${fmtBaht(subtotal)} บาท`
-      }
-    } else {
-      billDiscount = v
-      billValue = v
-    }
-  } else if (d.kind === 'percent') {
-    const t = d.value.trim()
-    const n = Number(t)
-    if (t === '' || !Number.isInteger(n) || n < 0 || n > 100) {
-      if (error === null) error = 'เปอร์เซ็นต์ต้องเป็นตัวเลขเต็ม 0-100'
-    } else {
-      billValue = n
-      billDiscount = Math.floor((subtotal * n) / 100)
-    }
-  }
-
-  return {
-    lineAmounts,
-    subtotal,
-    billDiscount,
-    billValue,
-    total: subtotal - billDiscount,
-    error,
-  }
-}
-
 // ---------------------------------------------------------------------------
 // OrdersPanel
 // ---------------------------------------------------------------------------
@@ -336,7 +225,6 @@ export function OrdersPanel() {
   const [busy, setBusy] = useState(false)
   const [filter, setFilter] = useState<Filter>('all')
   // one inline form at a time, keyed by order / payment id
-  const [discountFor, setDiscountFor] = useState<string | null>(null)
   const [cancelFor, setCancelFor] = useState<string | null>(null)
   const [refundFor, setRefundFor] = useState<string | null>(null)
 
@@ -367,7 +255,6 @@ export function OrdersPanel() {
 
   // another shop / day means another set of bills: drop any open form
   useEffect(() => {
-    setDiscountFor(null)
     setCancelFor(null)
     setRefundFor(null)
   }, [shopId, day])
@@ -388,22 +275,6 @@ export function OrdersPanel() {
     } finally {
       setBusy(false)
     }
-  }
-
-  async function saveDiscount(order: OwnerDayOrder, d: DiscountDraft) {
-    const p = previewDiscount(order, d)
-    if (p.error !== null) {
-      setMsg(p.error)
-      return
-    }
-    const ok = await run(() =>
-      api('POST', `/api/owner/orders/${encodeURIComponent(order.id)}/discount`, {
-        // the request is the FULL new discount state
-        bill: d.kind === 'none' ? null : { kind: d.kind, value: p.billValue },
-        lines: order.items.map((it) => ({ item_id: it.id, amount: p.lineAmounts[it.id] ?? 0 })),
-      }),
-    )
-    if (ok) setDiscountFor(null)
   }
 
   async function saveCancel(order: OwnerDayOrder, reason: string) {
@@ -524,13 +395,9 @@ export function OrdersPanel() {
             key={o.id}
             order={o}
             busy={busy}
-            discountFor={discountFor}
             cancelFor={cancelFor}
             refundFor={refundFor}
             actions={{
-              openDiscount: setDiscountFor,
-              closeDiscount: () => setDiscountFor(null),
-              saveDiscount: (order, d) => void saveDiscount(order, d),
               openCancel: setCancelFor,
               closeCancel: () => setCancelFor(null),
               saveCancel: (order, reason) => void saveCancel(order, reason),
@@ -552,9 +419,6 @@ export default OrdersPanel
 // ---------------------------------------------------------------------------
 
 interface CardActions {
-  openDiscount(id: string): void
-  closeDiscount(): void
-  saveDiscount(order: OwnerDayOrder, d: DiscountDraft): void
   openCancel(id: string): void
   closeCancel(): void
   saveCancel(order: OwnerDayOrder, reason: string): void
@@ -570,14 +434,12 @@ function statusBadgeClass(status: OrderStatus): string {
 function OrderCard({
   order,
   busy,
-  discountFor,
   cancelFor,
   refundFor,
   actions,
 }: {
   order: OwnerDayOrder
   busy: boolean
-  discountFor: string | null
   cancelFor: string | null
   refundFor: string | null
   actions: CardActions
@@ -690,14 +552,6 @@ function OrderCard({
           <div className="row">
             <button
               type="button"
-              className="btn"
-              disabled={busy}
-              onClick={() => actions.openDiscount(order.id)}
-            >
-              ส่วนลด
-            </button>
-            <button
-              type="button"
               className="btn danger"
               disabled={busy}
               onClick={() => actions.openCancel(order.id)}
@@ -705,14 +559,6 @@ function OrderCard({
               ยกเลิกบิล
             </button>
           </div>
-          {discountFor === order.id ? (
-            <DiscountForm
-              order={order}
-              busy={busy}
-              onSave={actions.saveDiscount}
-              onCancel={actions.closeDiscount}
-            />
-          ) : null}
           {cancelFor === order.id ? (
             <CancelForm
               order={order}
@@ -724,100 +570,6 @@ function OrderCard({
         </>
       ) : null}
     </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Discount form (3.27): the FULL new discount state, with a live preview
-// ---------------------------------------------------------------------------
-
-function DiscountForm({
-  order,
-  busy,
-  onSave,
-  onCancel,
-}: {
-  order: OwnerDayOrder
-  busy: boolean
-  onSave: (order: OwnerDayOrder, d: DiscountDraft) => void
-  onCancel: () => void
-}) {
-  const [d, setD] = useState<DiscountDraft>(() => discountDraftFrom(order))
-  const [err, setErr] = useState('')
-  const p = previewDiscount(order, d)
-
-  function setLine(id: string, value: string) {
-    setD((prev) => ({ ...prev, lines: { ...prev.lines, [id]: value } }))
-  }
-
-  async function submit(e: FormEvent) {
-    e.preventDefault()
-    if (p.error !== null) {
-      setErr(p.error)
-      return
-    }
-    setErr('')
-    onSave(order, d)
-  }
-
-  return (
-    <form className="group-block" onSubmit={submit}>
-      <h3>ส่วนลดบิล #{order.queue_number}</h3>
-      {err ? <p className="error small">{err}</p> : null}
-      {order.items.map((it) => (
-        <label key={it.id}>
-          ส่วนลด "{it.item_name}" (บาท, สูงสุด {fmtBaht(it.unit_price * it.quantity)})
-          <input
-            value={d.lines[it.id] ?? ''}
-            inputMode="decimal"
-            placeholder="0"
-            disabled={busy}
-            onChange={(e) => setLine(it.id, e.target.value)}
-          />
-        </label>
-      ))}
-      <div className="row">
-        <label className="grow">
-          ส่วนลดทั้งบิล
-          <select
-            value={d.kind}
-            disabled={busy}
-            onChange={(e) => setD((prev) => ({ ...prev, kind: e.target.value as BillKind }))}
-          >
-            <option value="none">ไม่มี</option>
-            <option value="baht">บาท</option>
-            <option value="percent">%</option>
-          </select>
-        </label>
-        <label className="grow">
-          มูลค่า
-          <input
-            value={d.value}
-            inputMode="decimal"
-            placeholder={d.kind === 'percent' ? 'เช่น 10' : 'เช่น 20'}
-            disabled={busy || d.kind === 'none'}
-            onChange={(e) => setD((prev) => ({ ...prev, value: e.target.value }))}
-          />
-        </label>
-      </div>
-      <p className="muted small">
-        ยอดก่อนลดทั้งบิล {fmtBaht(p.subtotal)} บาท · ส่วนลดทั้งบิล -{fmtBaht(p.billDiscount)} บาท
-      </p>
-      <p className={`preview-line${p.error ? ' err' : ''}`}>
-        {p.error ?? `ยอดรวมใหม่ ${fmtBaht(p.total)} บาท`}
-      </p>
-      <p className="muted small">
-        ตัวเลขที่กรอกคือส่วนลดใหม่ทั้งบิล — ช่องที่เว้นว่างจะกลับเป็นไม่ลด และบันทึกได้เฉพาะบิลที่ยังไม่จ่าย
-      </p>
-      <div className="row">
-        <button className="btn primary" type="submit" disabled={busy}>
-          บันทึกส่วนลด
-        </button>
-        <button className="btn ghost" type="button" onClick={onCancel} disabled={busy}>
-          ปิด
-        </button>
-      </div>
-    </form>
   )
 }
 

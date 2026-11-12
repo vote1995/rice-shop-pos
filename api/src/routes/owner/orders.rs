@@ -1,14 +1,11 @@
-//! `/owner/...` bills, discounts and refunds (ROADMAP M1-4a; FEATURES
-//! 3.27-3.28, 3.47, 3.60).
+//! `/owner/...` bills and refunds (ROADMAP M1-4a; FEATURES 3.28, 3.47, 3.60).
 //!
 //! Endpoints (all [`OwnerAuth`]; owners have users.shop_id NULL and see every
 //! shop - schema 0001 - so the day view scopes by the shop_id path segment
-//! and the bill/payment endpoints by the id in the path):
+//! and the cancel/payment endpoints by the id in the path):
 //! - `GET  /owner/shops/{shop_id}/orders?day=YYYY-MM-DD`  the bills of one
 //!   Bangkok (UTC+7) calendar day, newest first, at most 500, each with its
 //!   lines and its payments (no `day` = today)
-//! - `POST /owner/orders/{id}/discount`                   per-plate and
-//!   bill-wide discount, owner only (3.27)
 //! - `POST /owner/orders/{id}/cancel`                     void an unpaid bill;
 //!   `cancelled_by` is the owner's own user id (3.15, 3.47)
 //! - `POST /owner/payments/{id}/refund`                   mark a succeeded
@@ -20,14 +17,12 @@
 //! the same bound as a cancel reason), the D1 change counter and the
 //! 404/409 transition explainer.
 //!
-//! Discounts (3.27) are the one place the money columns of the append-only
-//! order tables are rewritten (schema 0001: only the server's state machine
-//! may), and the request is the FULL new discount state of an open
-//! (preparing|served) bill: EVERY line is rewritten - one the request does
-//! not mention goes back to 0 - and the bill totals are recomputed from those
-//! lines in the same D1 batch, guarded by "the bill is still open", whose
-//! change count is then checked. Refunds (3.28) never touch the order row: it
-//! stays 'paid' and the reports subtract `refund_amount`.
+//! Nothing here rewrites the money columns of the append-only order tables
+//! (schema 0001: only the server's state machine may); the one discount that
+//! remains is the system-set staff-meal one written on orders.discount_amount
+//! at order creation in `routes::orders`, which the day view just reports.
+//! Refunds (3.28) never touch the order row either: it stays 'paid' and the
+//! reports subtract `refund_amount`.
 
 use std::collections::HashMap;
 
@@ -81,36 +76,6 @@ const PAYMENT_COLUMNS: &str = "id, order_id, method, amount, cash_received, cash
 // ---------------------------------------------------------------------------
 // Request / response shapes
 // ---------------------------------------------------------------------------
-
-/// `POST /owner/orders/{id}/discount` body (3.27). `bill` is the bill-wide
-/// discount (null/absent = none); `lines` is the FULL new per-plate discount
-/// state, so a plate the request does not mention goes back to no discount.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DiscountBody {
-    bill: Option<BillDiscountBody>,
-    #[serde(default)]
-    lines: Vec<DiscountLineBody>,
-}
-
-/// "baht" (that many satang off the bill) or "percent" (0..=100, floored to
-/// whole satang) - the same rule shape the channel markup uses (3.6).
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BillDiscountBody {
-    kind: String,
-    value: i64,
-}
-
-/// One plate of the bill: `item_id` is the order line id the order JSON
-/// reports as `items[].id` (order_items.id), `amount` the new line discount
-/// in satang.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DiscountLineBody {
-    item_id: String,
-    amount: i64,
-}
 
 /// `POST /owner/orders/{id}/cancel` body: a reason is mandatory (3.15).
 #[derive(Debug, Deserialize)]
@@ -288,139 +253,6 @@ pub(super) fn day_param_start_ms(raw: Option<&str>, now: i64) -> Result<i64, Api
         return Err(bad());
     }
     Ok(bangkok_day_start_ms(days_from_civil(year, month, day) * DAY_MS + NOON_MS))
-}
-
-/// One stored line of the bill, as the discount math sees it: the frozen
-/// unit_price and quantity of order_items (schema 0001 - a later menu or
-/// price edit never changes an old bill).
-struct BillLine {
-    item_id: String,
-    unit_price: i64,
-    quantity: i64,
-}
-
-/// One line after the new discount state was applied.
-#[derive(Debug)]
-struct DiscountedLine {
-    item_id: String,
-    discount_amount: i64,
-    line_total: i64,
-}
-
-/// The recomputed bill: EVERY line with its discount and line_total, plus the
-/// subtotal of those lines, the bill discount and the total.
-#[derive(Debug)]
-struct DiscountedBill {
-    lines: Vec<DiscountedLine>,
-    #[allow(dead_code)] // asserted by the host unit tests
-    subtotal: i64,
-    bill_discount: i64,
-    #[allow(dead_code)] // asserted by the host unit tests; the stored total is recomputed in SQL
-    total: i64,
-}
-
-/// Prices a discount request (3.27) against the stored lines of a bill:
-/// - every line discount must fit 0..=unit_price * quantity,
-/// - a line the request does not mention gets 0 (the request is the FULL new
-///   state, so an omitted line means "no discount here again"),
-/// - the bill discount is `baht` satang (0..=subtotal) or `percent` of the
-///   subtotal (0..=100), floored to whole satang,
-/// - `total = subtotal - bill discount`, exactly the shape orders.total_amount
-///   keeps elsewhere (sum of line_total minus orders.discount_amount).
-///
-/// Every failure is a 400 naming the plate/rule; only a checked-multiply
-/// overflow (impossible with schema-bounded amounts) becomes a 500.
-fn apply_discounts(
-    stored: &[BillLine],
-    bill: Option<&BillDiscountBody>,
-    wanted: &[DiscountLineBody],
-) -> Result<DiscountedBill, ApiError> {
-    // A repeated line id would be ambiguous, and unknown ids must be told
-    // apart from the ones that were applied, so the request is turned into a
-    // map first and whatever survives the walk below is unknown.
-    let mut requested: HashMap<&str, i64> = HashMap::with_capacity(wanted.len());
-    for line in wanted {
-        if requested.insert(line.item_id.as_str(), line.amount).is_some() {
-            return Err(ApiError::BadRequest(format!(
-                "order line {} appears more than once",
-                line.item_id
-            )));
-        }
-    }
-
-    let mut lines = Vec::with_capacity(stored.len());
-    let mut subtotal = 0_i64;
-    for line in stored {
-        let gross = line
-            .unit_price
-            .checked_mul(line.quantity)
-            .ok_or_else(|| ApiError::Internal("order line amount overflows".into()))?;
-        let discount = match requested.remove(line.item_id.as_str()) {
-            Some(amount) if amount < 0 || amount > gross => {
-                return Err(ApiError::BadRequest(format!(
-                    "lines amount for order line {} must be between 0 and {gross} satang",
-                    line.item_id
-                )));
-            }
-            Some(amount) => amount,
-            None => 0,
-        };
-        let line_total = gross - discount;
-        subtotal = subtotal
-            .checked_add(line_total)
-            .ok_or_else(|| ApiError::Internal("order subtotal overflows".into()))?;
-        lines.push(DiscountedLine {
-            item_id: line.item_id.clone(),
-            discount_amount: discount,
-            line_total,
-        });
-    }
-    if !requested.is_empty() {
-        let mut unknown: Vec<&str> = requested.keys().copied().collect();
-        unknown.sort_unstable();
-        return Err(ApiError::BadRequest(format!(
-            "order line(s) {} are not on this order",
-            unknown.join(", ")
-        )));
-    }
-
-    let bill_discount = match bill {
-        None => 0,
-        Some(rule) => match rule.kind.as_str() {
-            "baht" => {
-                if rule.value < 0 || rule.value > subtotal {
-                    return Err(ApiError::BadRequest(format!(
-                        "bill discount must be between 0 and {subtotal} satang"
-                    )));
-                }
-                rule.value
-            }
-            "percent" => {
-                if !(0..=100).contains(&rule.value) {
-                    return Err(ApiError::BadRequest(
-                        "bill discount percent must be between 0 and 100".into(),
-                    ));
-                }
-                // Integer division floors: the shop never rounds a discount up.
-                subtotal
-                    .checked_mul(rule.value)
-                    .ok_or_else(|| ApiError::Internal("bill discount overflows".into()))?
-                    / 100
-            }
-            other => {
-                return Err(ApiError::BadRequest(format!(
-                    "bill discount kind must be 'baht' or 'percent', got '{other}'"
-                )))
-            }
-        },
-    };
-
-    Ok(DiscountedBill {
-        lines,
-        subtotal,
-        bill_discount,
-        total: subtotal - bill_discount,
-    })
 }
 
 /// The refund amount (3.28): null = the whole payment, else 1..=payment
@@ -639,121 +471,6 @@ pub async fn day_list(
     }))
 }
 
-/// Discounts a bill (3.27, owner only). The request is the FULL new discount
-/// state of every plate plus the bill-wide rule, so the whole bill is written
-/// in ONE D1 batch: each line's discount_amount/line_total (guarded by "the
-/// bill is still open"), then orders.discount_amount/total_amount from those
-/// lines. The order UPDATE must change exactly one row, else the bill closed
-/// in the meantime and the caller reloads (409 naming the status).
-#[worker::send]
-pub async fn discount(
-    State(state): State<AppState>,
-    _owner: OwnerAuth,
-    Path(id): Path<String>,
-    ApiJson(body): ApiJson<DiscountBody>,
-) -> Result<Json<OrderJson>, ApiError> {
-    let order_id = parse_uuid(&id, "id")?.to_string();
-    let shop_id = order_shop(&state.env, &order_id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    let env = &state.env;
-
-    let order = load_order(env, &shop_id, &order_id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    if !matches!(order.status.as_str(), "preparing" | "served") {
-        return Err(ApiError::Conflict(format!("order is {}", order.status)));
-    }
-
-    // Normalize the request ids to the stored (uuid) form before the math
-    // sees them, so a differently-cased id still matches its line.
-    let mut wanted = Vec::with_capacity(body.lines.len());
-    for line in &body.lines {
-        wanted.push(DiscountLineBody {
-            item_id: parse_uuid(&line.item_id, "lines[].item_id")?.to_string(),
-            amount: line.amount,
-        });
-    }
-    let stored: Vec<BillLine> = order
-        .items
-        .iter()
-        .map(|item| BillLine {
-            item_id: item.id.clone(),
-            unit_price: item.unit_price,
-            quantity: item.quantity,
-        })
-        .collect();
-    let recomputed = apply_discounts(&stored, body.bill.as_ref(), &wanted)?;
-
-    // Every statement is guarded by "bill still open AND it still has exactly
-    // the lines the math above saw": a concurrent "customer orders more"
-    // (staff add_items) would otherwise get its new line silently left out
-    // of the total. D1 runs a batch as one transaction, so the guard reads
-    // the same state in every statement: either all apply or none do.
-    let line_count = i64::try_from(recomputed.lines.len())
-        .map_err(|_| ApiError::Internal("line count overflows".into()))?;
-    let now = now_ms();
-    let mut statements = Vec::with_capacity(recomputed.lines.len() + 1);
-    for line in &recomputed.lines {
-        statements.push(
-            db::db(env)?
-                .prepare(
-                    "UPDATE order_items
-                     SET discount_amount = ?1, line_total = ?2, updated_at = ?3
-                     WHERE id = ?4 AND order_id = ?5
-                       AND EXISTS (SELECT 1 FROM orders
-                                   WHERE id = ?5 AND shop_id = ?6
-                                     AND status IN ('preparing', 'served'))
-                       AND (SELECT COUNT(*) FROM order_items WHERE order_id = ?5) = ?7",
-                )
-                .bind(&[
-                    int(line.discount_amount),
-                    int(line.line_total),
-                    int(now),
-                    txt(&line.item_id),
-                    txt(&order_id),
-                    txt(&shop_id),
-                    int(line_count),
-                ])?,
-        );
-    }
-    // The total is recomputed from the stored line totals (just updated in
-    // this same transaction), never trusted from the in-memory copy. The
-    // member's reserved points are money here too (1 point = 100 satang,
-    // migration 0011): every total recompute subtracts them, so an owner
-    // discount on a member bill can never resurrect the redeemed points.
-    statements.push(
-        db::db(env)?
-            .prepare(
-                "UPDATE orders
-                 SET discount_amount = ?1,
-                     total_amount = MAX(0, (SELECT COALESCE(SUM(line_total), 0)
-                                            FROM order_items WHERE order_id = ?3)
-                                           - ?1 - points_redeemed * 100),
-                     updated_at = ?2
-                 WHERE id = ?3 AND shop_id = ?4 AND status IN ('preparing', 'served')
-                   AND (SELECT COUNT(*) FROM order_items WHERE order_id = ?3) = ?5",
-            )
-            .bind(&[
-                int(recomputed.bill_discount),
-                int(now),
-                txt(&order_id),
-                txt(&shop_id),
-                int(line_count),
-            ])?,
-    );
-    let results = db::db(env)?.batch(statements).await?;
-    let updated = results.last().map(changes).transpose()?.unwrap_or(0);
-    if updated == 0 {
-        return Err(transition_refused(env, &shop_id, &order_id).await);
-    }
-
-    let order = load_order(env, &shop_id, &order_id)
-        .await?
-        .ok_or_else(|| ApiError::Internal(format!("order {order_id} vanished")))?;
-    Ok(Json(order))
-}
-
 /// Void an unpaid bill as the owner (3.15, 3.47): the same conditional
 /// transition as the staff cancel, only `cancelled_by` is the OWNER's user
 /// id, so the owner app's "cancelled bills" list shows who voided it. A paid
@@ -942,162 +659,6 @@ mod tests {
         // 2024-01-01T00:00:00Z, and a date before the epoch goes negative.
         assert_eq!(days_from_civil(2024, 1, 1) * DAY_MS, 1_704_067_200_000);
         assert_eq!(days_from_civil(1969, 12, 31), -1);
-    }
-
-    // -- discounts (3.27) ---------------------------------------------------
-
-    fn stored_line(item_id: &str, unit_price: i64, quantity: i64) -> BillLine {
-        BillLine {
-            item_id: item_id.to_owned(),
-            unit_price,
-            quantity,
-        }
-    }
-
-    fn want(item_id: &str, amount: i64) -> DiscountLineBody {
-        DiscountLineBody {
-            item_id: item_id.to_owned(),
-            amount,
-        }
-    }
-
-    fn bill_rule(kind: &str, value: i64) -> BillDiscountBody {
-        BillDiscountBody {
-            kind: kind.to_owned(),
-            value,
-        }
-    }
-
-    /// Two plates: rice with curry 2x5000 and one omelette 3500.
-    fn bill_lines() -> Vec<BillLine> {
-        vec![stored_line("l-rice", 5000, 2), stored_line("l-egg", 3500, 1)]
-    }
-
-    #[test]
-    fn the_request_is_the_whole_new_discount_state() {
-        let state = apply_discounts(&bill_lines(), None, &[want("l-rice", 1000)]).unwrap();
-        // The mentioned line gets its discount, the omitted one goes to 0.
-        assert_eq!(state.lines.len(), 2);
-        assert_eq!(state.lines[0].item_id, "l-rice");
-        assert_eq!(state.lines[0].discount_amount, 1000);
-        assert_eq!(state.lines[0].line_total, 9000);
-        assert_eq!(state.lines[1].item_id, "l-egg");
-        assert_eq!(state.lines[1].discount_amount, 0);
-        assert_eq!(state.lines[1].line_total, 3500);
-        assert_eq!(state.subtotal, 12_500);
-        assert_eq!(state.bill_discount, 0);
-        assert_eq!(state.total, 12_500);
-        // Re-sending an empty request clears every line discount again.
-        let cleared = apply_discounts(&bill_lines(), None, &[]).unwrap();
-        assert!(cleared.lines.iter().all(|l| l.discount_amount == 0));
-        assert_eq!(cleared.subtotal, 13_500);
-        assert_eq!(cleared.total, 13_500);
-    }
-
-    #[test]
-    fn line_discounts_are_bounded_by_the_line_gross() {
-        // 0 and the full gross (a free plate) both fit.
-        assert!(apply_discounts(&bill_lines(), None, &[want("l-rice", 0)]).is_ok());
-        assert!(apply_discounts(&bill_lines(), None, &[want("l-rice", 10_000)]).is_ok());
-        // One satang more, or a negative amount, does not.
-        assert!(bad(apply_discounts(&bill_lines(), None, &[want("l-rice", 10_001)]))
-            .contains("between 0 and 10000"));
-        assert!(bad(apply_discounts(&bill_lines(), None, &[want("l-rice", -1)]))
-            .contains("between 0 and 10000"));
-        // The bound is per LINE: a discount bigger than another line's gross
-        // is fine for the line it names.
-        assert!(apply_discounts(&bill_lines(), None, &[want("l-egg", 3500)]).is_ok());
-    }
-
-    #[test]
-    fn unknown_and_repeated_line_ids_are_rejected() {
-        assert!(bad(apply_discounts(&bill_lines(), None, &[want("l-nope", 100)]))
-            .contains("not on this order"));
-        assert!(bad(apply_discounts(&bill_lines(), None, &[want("l-rice", 100), want("l-rice", 200)]))
-            .contains("more than once"));
-        // An empty bill has nothing to discount either.
-        assert!(bad(apply_discounts(&[], None, &[want("l-rice", 100)])).contains("not on this order"));
-    }
-
-    #[test]
-    fn bill_discount_in_baht_is_bounded_by_the_subtotal() {
-        // The subtotal is that of the stored lines AFTER their line discounts.
-        let state = apply_discounts(
-            &bill_lines(),
-            Some(&bill_rule("baht", 500)),
-            &[want("l-rice", 1000)],
-        )
-        .unwrap();
-        assert_eq!(state.subtotal, 12_500);
-        assert_eq!(state.bill_discount, 500);
-        assert_eq!(state.total, 12_000);
-        // 0 and the whole subtotal fit ...
-        assert!(
-            apply_discounts(&bill_lines(), Some(&bill_rule("baht", 13_500)), &[]).is_ok()
-        );
-        // ... one satang above the (undiscounted) subtotal does not, nor does
-        // a negative amount.
-        assert!(bad(apply_discounts(&bill_lines(), Some(&bill_rule("baht", 13_501)), &[]))
-            .contains("between 0 and 13500"));
-        assert!(bad(apply_discounts(&bill_lines(), Some(&bill_rule("baht", -1)), &[]))
-            .contains("between 0 and 13500"));
-    }
-
-    #[test]
-    fn bill_discount_in_percent_floors_to_whole_satang() {
-        // 12345 * 33 / 100 = 4073.85 -> 4073 satang off.
-        let lines = vec![stored_line("l-one", 12_345, 1)];
-        let state = apply_discounts(&lines, Some(&bill_rule("percent", 33)), &[]).unwrap();
-        assert_eq!(state.bill_discount, 4073);
-        assert_eq!(state.total, 8272);
-        // 0% and 100% are the bounds; 100% leaves a zero total.
-        assert_eq!(
-            apply_discounts(&lines, Some(&bill_rule("percent", 0)), &[]).unwrap().bill_discount,
-            0
-        );
-        assert_eq!(
-            apply_discounts(&lines, Some(&bill_rule("percent", 100)), &[]).unwrap().total,
-            0
-        );
-        assert!(bad(apply_discounts(&lines, Some(&bill_rule("percent", 101)), &[]))
-            .contains("between 0 and 100"));
-        assert!(bad(apply_discounts(&lines, Some(&bill_rule("percent", -1)), &[]))
-            .contains("between 0 and 100"));
-    }
-
-    #[test]
-    fn bill_discount_kind_must_be_known() {
-        assert!(bad(apply_discounts(&bill_lines(), Some(&bill_rule("euro", 10)), &[]))
-            .contains("kind"));
-        // Even at 0 satang, an unknown kind is still a client bug.
-        assert!(bad(apply_discounts(&bill_lines(), Some(&bill_rule("euro", 0)), &[]))
-            .contains("kind"));
-    }
-
-    #[test]
-    fn line_and_bill_discounts_stack() {
-        // 10000 - 1000 = 9000, plus 3500 -> 12500; -10% -> 11250.
-        let state = apply_discounts(
-            &bill_lines(),
-            Some(&bill_rule("percent", 10)),
-            &[want("l-rice", 1000)],
-        )
-        .unwrap();
-        assert_eq!(state.subtotal, 12_500);
-        assert_eq!(state.bill_discount, 1250);
-        assert_eq!(state.total, 11_250);
-        // With a baht discount bigger than every line discount, the total
-        // still cannot go below zero (the bound is the subtotal).
-        let state = apply_discounts(
-            &bill_lines(),
-            Some(&bill_rule("baht", 10_000)),
-            &[want("l-egg", 3500)],
-        )
-        .unwrap();
-        assert_eq!(state.subtotal, 10_000);
-        assert_eq!(state.total, 0);
-        // ...and one satang more than the subtotal is refused.
-        assert!(apply_discounts(&bill_lines(), Some(&bill_rule("baht", 10_001)), &[want("l-egg", 3500)]).is_err());
     }
 
     // -- refunds (3.28) -----------------------------------------------------

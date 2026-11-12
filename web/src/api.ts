@@ -581,17 +581,6 @@ export interface OwnerDayOrdersData {
   orders: OwnerDayOrder[]
 }
 
-/** POST /api/owner/orders/{id}/discount body: the FULL new discount state. */
-export interface BillDiscount {
-  kind: 'baht' | 'percent'
-  value: number
-}
-
-export interface DiscountBody {
-  bill: BillDiscount | null
-  lines: Array<{ item_id: string; amount: number }>
-}
-
 // ---- owner report (M2-R1): GET /api/owner/shops/{shop_id}/report ----
 // Money is INTEGER satang like everywhere else; `from`/`to` and the day keys
 // are Bangkok calendar days "YYYY-MM-DD"; every bucket counts PAID bills
