@@ -63,10 +63,16 @@ const MAX_DAY_ORDERS: i64 = 500;
 /// Column lists mirror `routes::orders` one-to-one (the same JSON structs are
 /// built from them); local consts keep that module's SQL untouched.
 /// `order_id` rides along on items and payments only to group them under
-/// their bill.
+/// their bill. The member columns of migration 0011 and the member's name
+/// come as scalar subqueries on `orders.customer_id` — the same trick as
+/// `routes::orders::ORDER_COLUMNS`, so the day view needs no JOIN and its row
+/// count cannot change.
 const ORDER_COLUMNS: &str = "id, queue_number, order_type, channel, table_no, note, status, \
      total_amount, discount_amount, created_by, created_at, paid_at, cancelled_at, cancel_reason, \
-     served_at, staff_meal";
+     served_at, staff_meal, customer_id, points_redeemed, points_earned, \
+     (SELECT c.first_name || ' ' || c.last_name FROM customers c WHERE c.id = orders.customer_id) \
+       AS member_name, \
+     (SELECT c.points FROM customers c WHERE c.id = orders.customer_id) AS member_points";
 const ITEM_COLUMNS: &str = "id, order_id, menu_item_id, item_name, options_json, quantity, \
      note, unit_price, discount_amount, line_total";
 const PAYMENT_COLUMNS: &str = "id, order_id, method, amount, cash_received, cash_change, \
@@ -173,6 +179,13 @@ struct OrderRow {
     cancel_reason: Option<String>,
     served_at: Option<i64>,
     staff_meal: i64,
+    /// The member columns of migration 0011; the member's name and CURRENT
+    /// balance arrive as the two scalar subqueries of [`ORDER_COLUMNS`].
+    customer_id: Option<String>,
+    points_redeemed: i64,
+    points_earned: i64,
+    member_name: Option<String>,
+    member_points: Option<i64>,
 }
 
 /// One order_items row of the day window.
@@ -467,6 +480,11 @@ fn order_json(row: OrderRow, items: Vec<OrderItemJson>) -> OrderJson {
         cancel_reason: row.cancel_reason,
         served_at: row.served_at,
         staff_meal: row.staff_meal != 0,
+        customer_id: row.customer_id,
+        member_name: row.member_name,
+        points_redeemed: row.points_redeemed,
+        points_earned: row.points_earned,
+        member_points: row.member_points,
         items,
     }
 }
@@ -700,14 +718,18 @@ pub async fn discount(
         );
     }
     // The total is recomputed from the stored line totals (just updated in
-    // this same transaction), never trusted from the in-memory copy.
+    // this same transaction), never trusted from the in-memory copy. The
+    // member's reserved points are money here too (1 point = 100 satang,
+    // migration 0011): every total recompute subtracts them, so an owner
+    // discount on a member bill can never resurrect the redeemed points.
     statements.push(
         db::db(env)?
             .prepare(
                 "UPDATE orders
                  SET discount_amount = ?1,
                      total_amount = MAX(0, (SELECT COALESCE(SUM(line_total), 0)
-                                            FROM order_items WHERE order_id = ?3) - ?1),
+                                            FROM order_items WHERE order_id = ?3)
+                                           - ?1 - points_redeemed * 100),
                      updated_at = ?2
                  WHERE id = ?3 AND shop_id = ?4 AND status IN ('preparing', 'served')
                    AND (SELECT COUNT(*) FROM order_items WHERE order_id = ?3) = ?5",
@@ -1116,6 +1138,11 @@ mod tests {
             cancel_reason: None,
             served_at: None,
             staff_meal: 0,
+            customer_id: None,
+            points_redeemed: 0,
+            points_earned: 0,
+            member_name: None,
+            member_points: None,
         }
     }
 

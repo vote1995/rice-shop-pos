@@ -10,7 +10,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { ApiError, api, errorCode, friendlyError } from '../api'
-import type { MenuData, MenuItem, MenuOption, Order } from '../api'
+import type {
+  MemberLookup,
+  MemberLookupResult,
+  MenuData,
+  MenuItem,
+  MenuOption,
+  Order,
+} from '../api'
 import { applicableGroups, bahtToSatang, fmtBaht, priceLine, validateLine } from './pricing'
 import type { Channel, GroupWithOptions } from './pricing'
 import StockCount from './StockCount'
@@ -1233,6 +1240,17 @@ export default function Counter({
     flash(`ยกเลิกคิว #${r.queue_number} แล้ว · ${r.cancel_reason ?? reason}`)
   }
 
+  /**
+   * Members (0011): the pay sheet's member step can rewrite the open bill
+   * (PUT /api/orders/{id}/member returns the UPDATED order). Swap both the
+   * sheet's order and the matching queue row for the server's version, so the
+   * head total, the cash buttons and any QR all follow the new amount.
+   */
+  function applyOrderUpdate(o: Order) {
+    setPayFor((prev) => (prev !== null && prev.id === o.id ? o : prev))
+    setOrders((prev) => prev.map((x) => (x.id === o.id ? o : x)))
+  }
+
   // ---- render ------------------------------------------------------------
 
   const pickedNames = groups.flatMap((g) =>
@@ -1454,6 +1472,7 @@ export default function Counter({
             setPayResult(r)
             void loadOrders()
           }}
+          onOrderChanged={applyOrderUpdate}
           onSessionExpired={() => expiredRef.current()}
           onRevoked={() => revokedRef.current()}
         />
@@ -1783,6 +1802,11 @@ export default function Counter({
             {CHANNEL_LABEL[o.channel] ?? o.channel}
           </span>
           {o.staff_meal ? <span className="pos-meal-badge">สวัสดิการ</span> : null}
+          {o.customer_id ? (
+            <span className="pos-member-chip">
+              สมาชิก{o.member_name ? ` ${o.member_name}` : ''}
+            </span>
+          ) : null}
           <span
             style={{
               fontSize: 13,
@@ -2247,8 +2271,23 @@ function OrderBreakdown({
 }
 
 // ---------------------------------------------------------------------------
-// Pay sheet: one tap closes a cash bill; delivery is settled in the app
+// Pay sheet: one tap closes a cash bill; delivery is settled in the app.
+// Counter bills pass through a MEMBER step first (สมาชิก): look the customer
+// up by phone, optionally redeem points (the server rewrites the bill and the
+// sheet continues with the UPDATED order), or skip straight to the payment.
 // ---------------------------------------------------------------------------
+
+/** 1 point = ฿1 = 100 satang; redemptions move in whole 10s only. */
+const POINT_STEP = 10
+
+/**
+ * The loyalty cap on one bill: the largest multiple of 10 that is <= the
+ * member's available points AND <= the subtotal in whole baht (the subtotal is
+ * the bill BEFORE points, i.e. total_amount + points_redeemed*100).
+ */
+function maxRedeemable(availablePoints: number, subtotalSatang: number): number {
+  return Math.floor(Math.min(availablePoints, Math.floor(subtotalSatang / 100)) / POINT_STEP) * POINT_STEP
+}
 
 function PaySheet({
   order,
@@ -2260,6 +2299,7 @@ function PaySheet({
   onCash,
   onApp,
   onQrPaid,
+  onOrderChanged,
   onSessionExpired,
   onRevoked,
 }: {
@@ -2273,6 +2313,9 @@ function PaySheet({
   onCash: (paymentId: string, cashSatang: number) => void
   onApp: (paymentId: string) => void
   onQrPaid: (r: PayResult) => void
+  /** The member step's PUT /member returns the UPDATED order; Counter swaps
+   *  this sheet's order (and the queue row) for it, so every total follows. */
+  onOrderChanged?: (order: Order) => void
   onSessionExpired: () => void
   onRevoked: () => void
 }) {
@@ -2283,14 +2326,120 @@ function PaySheet({
   /** Once shown, the QR stays mounted (hidden under cash): flipping back must
    *  show the SAME charge, never create a second one. */
   const [qrOpened, setQrOpened] = useState(false)
+  // ---- member step (สมาชิก) ----
+  /** 'member' = the phone/points step, 'pay' = the payment screen. */
+  const [step, setStep] = useState<'member' | 'pay'>(() =>
+    memberStepApplies(order) && !order.customer_id ? 'member' : 'pay',
+  )
+  const [phone, setPhone] = useState('')
+  const [member, setMember] = useState<MemberLookup | null>(null)
+  const [looking, setLooking] = useState(false)
+  const [lookupErr, setLookupErr] = useState('')
+  /** points to redeem on this bill (stepper, multiples of 10; 0 = none). */
+  const [points, setPoints] = useState(0)
+  const [saving, setSaving] = useState(false)
+  const [memberErr, setMemberErr] = useState('')
+
   const total = order.total_amount
   const counter = order.channel === 'counter'
   const otherSat = bahtToSatang(other)
+  /** The bill is fully covered by points: no QR, one confirm button. */
+  const zeroTotal = total === 0
+  /** The bill subtotal BEFORE points — what a redemption is capped by. */
+  const subtotalSat = total + order.points_redeemed * 100
+  const maxRedeem = member ? Math.max(0, maxRedeemable(member.available_points, subtotalSat)) : 0
+  // the cap can only shrink under us (another open bill): never send more
+  const redeem = Math.min(points, maxRedeem)
+  /** What the bill would cost with the stepper value (points re-derive the
+   *  total FROM the subtotal, so editing an existing redemption works too). */
+  const afterPoints = Math.max(0, subtotalSat - redeem * 100)
 
   const cashButtons = useMemo(
     () => [total, ...BANKNOTES.map((v) => v * 100).filter((v) => v > total)].slice(0, 4),
     [total],
   )
+
+  /** true when the error ended the session (the caller must stop). */
+  function sessionGone(e: unknown): boolean {
+    if (errorCode(e) === 'session_invalid') {
+      onSessionExpired()
+      return true
+    }
+    if (errorCode(e) === 'device_revoked') {
+      onRevoked()
+      return true
+    }
+    return false
+  }
+
+  /** POST /api/members/lookup — the customer tells the staff their phone. */
+  async function lookupMember() {
+    const digits = phone.replace(/[\s-]/g, '')
+    if (digits === '') {
+      setLookupErr('กรอกเบอร์โทรก่อน')
+      return
+    }
+    setLooking(true)
+    setLookupErr('')
+    setMemberErr('')
+    try {
+      const d = await api<MemberLookupResult>(
+        'POST',
+        '/api/members/lookup',
+        { phone: digits, order_id: order.id },
+        'both',
+      )
+      setMember(d.customer)
+      const cap = Math.max(0, maxRedeemable(d.customer.available_points, subtotalSat))
+      // re-editing this bill's own member starts from what is already reserved
+      setPoints(
+        order.customer_id === d.customer.id
+          ? Math.min(Math.max(0, order.points_redeemed), cap)
+          : 0,
+      )
+    } catch (e) {
+      if (sessionGone(e)) return
+      setMember(null)
+      setLookupErr(
+        errorCode(e) === 'member_not_found'
+          ? 'ไม่พบสมาชิกเบอร์นี้ — ให้ลูกค้าสแกน QR หน้าร้านเพื่อสมัคร หรือกดข้ามได้'
+          : friendlyError(e),
+      )
+    } finally {
+      setLooking(false)
+    }
+  }
+
+  /**
+   * PUT /api/orders/{id}/member — attach the member (points 0 still earns
+   * points on this bill), then continue to the payment screen with the
+   * UPDATED order the server returns.
+   */
+  async function attachMember(pointsToUse: number) {
+    if (!member) return
+    setSaving(true)
+    setMemberErr('')
+    try {
+      const updated = await api<Order>(
+        'PUT',
+        `/api/orders/${encodeURIComponent(order.id)}/member`,
+        { customer_id: member.id, points: pointsToUse },
+        'both',
+      )
+      onOrderChanged?.(updated)
+      setStep('pay')
+    } catch (e) {
+      if (sessionGone(e)) return
+      // a pending PromptPay charge is for a FIXED amount: no member edits
+      setMemberErr(
+        errorCode(e) === 'qr_pending'
+          ? 'มี QR ค้างอยู่ แก้สมาชิกไม่ได้'
+          : friendlyError(e),
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
 
   if (result) {
     const cash = result.payment.method === 'cash'
@@ -2323,6 +2472,17 @@ function PaySheet({
                   : `${CHANNEL_LABEL[result.order.channel] ?? result.order.channel}`}
               {result.order.served_at === null ? ' · รอเสิร์ฟ' : ''}
             </span>
+            {result.order.customer_id ? (
+              <span style={{ fontSize: 14, fontWeight: 700, color: GREEN }}>
+                {result.order.points_redeemed > 0
+                  ? `ใช้ ${result.order.points_redeemed} แต้ม · `
+                  : ''}
+                ได้รับ +{result.order.points_earned} แต้ม
+                {result.order.member_points !== null
+                  ? ` · คงเหลือ ${result.order.member_points} แต้ม`
+                  : ''}
+              </span>
+            ) : null}
             <button
               type="button"
               style={{ ...S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN), marginTop: 10 }}
@@ -2345,21 +2505,189 @@ function PaySheet({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="pay-head">
-          <span style={{ fontSize: 17, fontWeight: 600, flex: 1 }}>รับเงิน คิว #{order.queue_number}</span>
+          <span style={{ fontSize: 17, fontWeight: 600, flex: 1 }}>
+            {step === 'member' ? 'สมาชิก' : 'รับเงิน'} คิว #{order.queue_number}
+          </span>
           <span style={{ fontSize: 26, fontWeight: 700 }}>{baht(total)}</span>
         </div>
         <div className="pay-scroll">
+        {step === 'member' ? (
+          <div className="pay-card" aria-label="สมาชิก">
+            <div className="pay-card-title">สมาชิก</div>
+            {order.customer_id ? (
+              <div className="pay-sum-row" style={{ color: 'var(--text)' }}>
+                <span>สมาชิกในบิลนี้</span>
+                <span style={{ fontWeight: 700 }}>
+                  {order.member_name ?? 'สมาชิก'}
+                  {order.points_redeemed > 0 ? ` · ใช้ ${order.points_redeemed} แต้ม` : ''}
+                </span>
+              </div>
+            ) : (
+              <p className="muted small" style={{ margin: 0 }}>
+                สมาชิกบอกเบอร์โทร — สะสมและใช้แต้มได้
+              </p>
+            )}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                value={phone}
+                inputMode="tel"
+                maxLength={15}
+                placeholder="เบอร์โทรลูกค้า"
+                aria-label="เบอร์โทรสมาชิก"
+                autoFocus
+                style={S.field}
+                onChange={(e) => setPhone(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void lookupMember()
+                }}
+              />
+              <button
+                type="button"
+                style={S.cardBtn(GREEN, 'var(--accent-contrast)', GREEN)}
+                disabled={looking || saving}
+                onClick={() => void lookupMember()}
+              >
+                {looking ? 'กำลังหา…' : 'ค้นหา'}
+              </button>
+            </div>
+            {lookupErr ? (
+              <p className="error small" role="alert" style={{ margin: 0 }}>
+                {lookupErr}
+              </p>
+            ) : null}
+
+            {member ? (
+              <>
+                <div className="pay-member-row">
+                  <span className="pay-member-name">
+                    {member.first_name} {member.last_name} · เบอร์ลงท้าย {member.phone_last4}
+                  </span>
+                </div>
+                <div className="pay-sum-row">
+                  <span>แต้มคงเหลือ</span>
+                  <span>
+                    {member.points} แต้ม
+                    {member.available_points < member.points
+                      ? ` (ใช้ได้ ${member.available_points})`
+                      : ''}
+                  </span>
+                </div>
+                {member.available_points >= POINT_STEP ? (
+                  <>
+                    <div className="pay-member-stepper">
+                      <span className="muted">ใช้แต้ม</span>
+                      <div className="pay-member-stepctl">
+                        <button
+                          type="button"
+                          aria-label={`ลดแต้ม ${POINT_STEP}`}
+                          disabled={saving || redeem <= 0}
+                          onClick={() => setPoints(Math.max(0, redeem - POINT_STEP))}
+                        >
+                          −
+                        </button>
+                        <span className="pay-member-stepval">{redeem}</span>
+                        <button
+                          type="button"
+                          aria-label={`เพิ่มแต้ม ${POINT_STEP}`}
+                          disabled={saving || redeem >= maxRedeem}
+                          onClick={() => setPoints(Math.min(maxRedeem, redeem + POINT_STEP))}
+                        >
+                          +
+                        </button>
+                      </div>
+                      <span className="muted small">สูงสุด {maxRedeem} แต้ม</span>
+                    </div>
+                    <div className="pay-sum-row pay-sum-total">
+                      <span>ยอดชำระ</span>
+                      <span>{baht(afterPoints)}</span>
+                    </div>
+                    {memberErr ? (
+                      <p className="error small" role="alert" style={{ margin: 0 }}>
+                        {memberErr}
+                      </p>
+                    ) : null}
+                    <button
+                      type="button"
+                      style={S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN)}
+                      disabled={saving || looking}
+                      onClick={() => void attachMember(redeem)}
+                    >
+                      {saving ? 'กำลังบันทึก…' : redeem > 0 ? `ใช้แต้ม ${redeem} · ยืนยัน` : 'ยืนยัน'}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <p className="muted" style={{ margin: 0 }}>
+                      แต้มยังไม่ถึง {POINT_STEP} — สะสมได้จากบิลนี้
+                    </p>
+                    {memberErr ? (
+                      <p className="error small" role="alert" style={{ margin: 0 }}>
+                        {memberErr}
+                      </p>
+                    ) : null}
+                    <button
+                      type="button"
+                      style={S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN)}
+                      disabled={saving || looking}
+                      onClick={() => void attachMember(0)}
+                    >
+                      {saving ? 'กำลังบันทึก…' : 'ต่อไป'}
+                    </button>
+                  </>
+                )}
+              </>
+            ) : null}
+
+            <button
+              type="button"
+              className="pay-member-skip"
+              disabled={looking || saving}
+              onClick={() => setStep('pay')}
+            >
+              ข้าม — ไม่ใช้สมาชิก
+            </button>
+          </div>
+        ) : null}
         <OrderBreakdown order={order} quickTypeOf={quickTypeOf} />
+        {step === 'member' ? null : (
         <div className="pay-card">
         <div className="pay-card-title">ชำระเงิน</div>
 
-        {counter && !qrAvailable ? (
+        {counter && memberStepApplies(order) ? (
+          <div className="pay-member-row">
+            <span className="pay-member-name">
+              {order.customer_id
+                ? `${order.member_name ?? 'สมาชิก'}${
+                    order.points_redeemed > 0 ? ` · ใช้ ${order.points_redeemed} แต้ม` : ''
+                  }`
+                : 'ไม่มีสมาชิก'}
+            </span>
+            {qrOpened ? (
+              <span className="muted small">มี QR ค้างอยู่ แก้สมาชิกไม่ได้</span>
+            ) : (
+              <button
+                type="button"
+                className="pay-member-edit"
+                disabled={busy}
+                onClick={() => {
+                  setLookupErr('')
+                  setMemberErr('')
+                  setStep('member')
+                }}
+              >
+                {order.customer_id ? 'แก้ไข' : 'ใส่เบอร์'}
+              </button>
+            )}
+          </div>
+        ) : null}
+
+        {counter && !qrAvailable && !zeroTotal ? (
           <p className="muted" style={{ margin: '4px 0' }}>
             ร้านนี้ไม่มี Beam QR — รับเงินสดเท่านั้น
           </p>
         ) : null}
 
-        {counter && qrAvailable ? (
+        {counter && qrAvailable && !zeroTotal ? (
           <div className="pos-seg pos-pay-seg" role="group" aria-label="วิธีชำระเงิน">
             <button
               type="button"
@@ -2383,7 +2711,7 @@ function PaySheet({
           </div>
         ) : null}
 
-        {counter && qrAvailable && qrOpened ? (
+        {counter && qrAvailable && qrOpened && !zeroTotal ? (
           <div hidden={mode !== 'qr'}>
           <BeamQr
             order={order}
@@ -2406,7 +2734,17 @@ function PaySheet({
           </div>
         ) : null}
 
-        {counter && mode === 'qr' ? null : counter ? (
+        {counter && zeroTotal ? (
+          // points covered the whole bill: settle it as cash with 0 received
+          <button
+            type="button"
+            style={S.bigBtn(GREEN, 'var(--accent-contrast)', GREEN)}
+            disabled={busy}
+            onClick={() => onCash(paymentId, 0)}
+          >
+            ยืนยัน (จ่ายด้วยแต้มครบ)
+          </button>
+        ) : counter && mode === 'qr' ? null : counter ? (
           <>
             <div style={{ fontSize: 14, color: MUTED }}>ลูกค้าให้เงินมา — กดครั้งเดียวจบ</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
@@ -2473,6 +2811,7 @@ function PaySheet({
           </button>
         )}
         </div>
+        )}
         </div>
 
         <button type="button" className="btn ghost pay-close" onClick={onClose} disabled={busy}>
@@ -2481,6 +2820,15 @@ function PaySheet({
       </div>
     </div>
   )
+}
+
+/**
+ * The member step exists for COUNTER bills only: never for staff meals, never
+ * for delivery-app orders (no counter = no points) and never once the bill is
+ * already paid.
+ */
+function memberStepApplies(o: Order): boolean {
+  return o.channel === 'counter' && !o.staff_meal && o.status !== 'paid'
 }
 
 // ---------------------------------------------------------------------------

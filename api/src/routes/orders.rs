@@ -58,7 +58,7 @@ use crate::extract::ApiJson;
 use crate::pricing::{line_total, price_line, PricingGroup, PricingItem, PricingOption};
 use crate::routes::owner::menu::{MenuItem, MenuOption, OptionGroup};
 use crate::util::{int, now_ms, opt_int, opt_txt, parse_uuid, txt};
-use crate::{db, error::ApiError, stock, AppState};
+use crate::{db, error::ApiError, loyalty, stock, AppState};
 
 /// Bangkok is UTC+7 all year (no DST), so the sale day boundary is a fixed
 /// offset from UTC.
@@ -97,10 +97,18 @@ const GROUP_COLUMNS: &str = "id, shop_id, menu_item_id, name, required, max_sele
 const OPTION_COLUMNS: &str = "id, shop_id, option_group_id, name, price_add, sold_out, \
      sort_order, created_at, updated_at";
 /// One orders row: exactly the fields the order JSON needs (`staff_meal` is
-/// INTEGER 0/1, migration 0007).
+/// INTEGER 0/1, migration 0007). The member columns of migration 0011 ride
+/// along, and the member's name / CURRENT balance come as scalar subqueries:
+/// [`ORDER_COLUMNS`] is shared by every `FROM orders` query here (none of them
+/// aliases the table), and a subquery cannot change the row count the way a
+/// JOIN could. `member_points` is the balance the settle batch keeps, i.e.
+/// what the pay sheet shows as "คงเหลือ", NOT the bill's reservation.
 const ORDER_COLUMNS: &str = "id, queue_number, order_type, channel, table_no, note, status, \
      total_amount, discount_amount, created_by, created_at, paid_at, cancelled_at, cancel_reason, \
-     served_at, staff_meal";
+     served_at, staff_meal, customer_id, points_redeemed, points_earned, \
+     (SELECT c.first_name || ' ' || c.last_name FROM customers c WHERE c.id = orders.customer_id) \
+       AS member_name, \
+     (SELECT c.points FROM customers c WHERE c.id = orders.customer_id) AS member_points";
 /// One order_items row: the JSON fields plus `order_id` to group lines under
 /// their bill.
 const ITEM_COLUMNS_SQL: &str = "id, order_id, menu_item_id, item_name, options_json, quantity, \
@@ -208,6 +216,18 @@ pub struct OrderJson {
     pub served_at: Option<i64>,
     /// สวัสดิการพนักงาน: billed 0, never counted as a sale (migration 0007).
     pub staff_meal: bool,
+    /// The member on the bill (migration 0011); NULL = no member. Reserved
+    /// while the bill is open, deducted by the settle batch on payment.
+    pub customer_id: Option<String>,
+    /// "Somchai Meechai" — the name the pay sheet greets the member with.
+    pub member_name: Option<String>,
+    /// Points reserved on this bill (1 point = 1.00 ฿ off the total).
+    pub points_redeemed: i64,
+    /// Points this bill earned, written by the settle batch when it closed.
+    pub points_earned: i64,
+    /// The member's CURRENT balance (never the balance minus this bill's
+    /// reservation); NULL when the bill has no member.
+    pub member_points: Option<i64>,
     pub items: Vec<OrderItemJson>,
 }
 
@@ -257,6 +277,13 @@ struct OrderRow {
     served_at: Option<i64>,
     /// INTEGER 0/1 (migration 0007).
     staff_meal: i64,
+    /// The member columns of migration 0011 (name/balance arrive as
+    /// subqueries, see [`ORDER_COLUMNS`]).
+    customer_id: Option<String>,
+    points_redeemed: i64,
+    points_earned: i64,
+    member_name: Option<String>,
+    member_points: Option<i64>,
 }
 
 /// One order_items row as D1 returns it.
@@ -545,6 +572,11 @@ fn order_json(order: OrderRow, items: Vec<OrderItemJson>) -> OrderJson {
         cancel_reason: order.cancel_reason,
         served_at: order.served_at,
         staff_meal: order.staff_meal != 0,
+        customer_id: order.customer_id,
+        member_name: order.member_name,
+        points_redeemed: order.points_redeemed,
+        points_earned: order.points_earned,
+        member_points: order.member_points,
         items,
     }
 }
@@ -974,6 +1006,12 @@ pub async fn create(
     // staff-meal limit is a filter OUTSIDE it: a staff meal over today's limit
     // inserts no bill, and every line/stock statement below (guarded by the
     // bill existing) inserts nothing either.
+    //
+    // The member columns (migration 0011) are deliberately NOT in this column
+    // list: a new bill starts with customer_id NULL and points_redeemed /
+    // points_earned 0 (the column defaults), and the member is attached later
+    // by `PUT /orders/{id}/member` — after pricing, so the reservation can be
+    // checked against the real subtotal.
     let mut statements = vec![db::db(env)?
         .prepare(
             "INSERT INTO orders
@@ -1168,7 +1206,7 @@ pub async fn add_items(
                 "UPDATE orders
                  SET total_amount = MAX(0, (SELECT COALESCE(SUM(line_total), 0)
                                             FROM order_items WHERE order_id = ?1)
-                                           - discount_amount),
+                                           - discount_amount - points_redeemed * 100),
                      status = 'preparing', served_at = NULL, updated_at = ?2
                  WHERE id = ?1 AND shop_id = ?3 AND status IN ('preparing', 'served')",
             )
@@ -1371,43 +1409,48 @@ pub async fn pay(
     let (cash_received, cash_change) = cash_fields(&body.method, amount, body.cash_received)?;
 
     let now = now_ms();
-    let results = db::db(env)?
-        .batch(vec![
-            db::db(env)?
-                .prepare(
-                    "INSERT INTO payments
+    // `loyalty::settle_statements` sees the bill as already paid (they run
+    // after the UPDATE below inside the SAME batch) and are a no-op for a bill
+    // without a member, so a plain cash bill keeps exactly its old behaviour.
+    let mut statements = vec![
+        db::db(env)?
+            .prepare(
+                "INSERT INTO payments
                        (id, shop_id, order_id, method, amount, cash_received, cash_change,
                         status, confirmed_by, confirmed_at, created_by, created_at, updated_at)
-                     SELECT ?1, ?3, ?2, ?4, total_amount, ?5, ?6,
-                            'succeeded',
-                            NULL,
-                            NULL,
-                            ?7, ?8, ?8
-                     FROM orders
-                     WHERE id = ?2 AND shop_id = ?3 AND status IN ('preparing', 'served')
-                       AND total_amount = ?9",
-                )
-                .bind(&[
-                    txt(&payment_id),
-                    txt(&order_id),
-                    txt(&shop_id),
-                    txt(&body.method),
-                    opt_int(cash_received),
-                    opt_int(cash_change),
-                    txt(&staff.user_id),
-                    int(now),
-                    int(amount),
-                ])?,
-            db::db(env)?
-                .prepare(
-                    "UPDATE orders SET status = 'paid', paid_at = ?4, closed_at = ?4, updated_at = ?4
-                     WHERE id = ?2 AND shop_id = ?3 AND status IN ('preparing', 'served')
-                       AND EXISTS (SELECT 1 FROM payments WHERE id = ?1 AND order_id = ?2)",
-                )
-                .bind(&[txt(&payment_id), txt(&order_id), txt(&shop_id), int(now)])?,
-        ])
-        .await?;
-    let updated = results.last().map(changes).transpose()?.unwrap_or(0);
+                 SELECT ?1, ?3, ?2, ?4, total_amount, ?5, ?6,
+                        'succeeded',
+                        NULL,
+                        NULL,
+                        ?7, ?8, ?8
+                 FROM orders
+                 WHERE id = ?2 AND shop_id = ?3 AND status IN ('preparing', 'served')
+                   AND total_amount = ?9",
+            )
+            .bind(&[
+                txt(&payment_id),
+                txt(&order_id),
+                txt(&shop_id),
+                txt(&body.method),
+                opt_int(cash_received),
+                opt_int(cash_change),
+                txt(&staff.user_id),
+                int(now),
+                int(amount),
+            ])?,
+        db::db(env)?
+            .prepare(
+                "UPDATE orders SET status = 'paid', paid_at = ?4, closed_at = ?4, updated_at = ?4
+                 WHERE id = ?2 AND shop_id = ?3 AND status IN ('preparing', 'served')
+                   AND EXISTS (SELECT 1 FROM payments WHERE id = ?1 AND order_id = ?2)",
+            )
+            .bind(&[txt(&payment_id), txt(&order_id), txt(&shop_id), int(now)])?,
+    ];
+    statements.extend(loyalty::settle_statements(env, &order_id, now)?);
+    let results = db::db(env)?.batch(statements).await?;
+    // Index 1 is the paid-UPDATE; the settle statements follow it and are
+    // idempotent no-ops for a bill that did not close.
+    let updated = results.get(1).map(changes).transpose()?.unwrap_or(0);
     if updated == 0 {
         // Lost a race: the bill closed or its total changed. Nothing was
         // charged (the insert is guarded by the same condition).
@@ -1628,6 +1671,11 @@ mod tests {
             cancel_reason: None,
             served_at: None,
             staff_meal: 0,
+            customer_id: None,
+            points_redeemed: 0,
+            points_earned: 0,
+            member_name: None,
+            member_points: None,
         }
     }
 

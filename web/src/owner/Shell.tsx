@@ -16,7 +16,16 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useOwnerShop } from './shopContext'
 
-export type OwnerPage = 'report' | 'orders' | 'menu' | 'stock' | 'slips' | 'staff' | 'devices' | 'shops'
+export type OwnerPage =
+  | 'report'
+  | 'orders'
+  | 'members'
+  | 'menu'
+  | 'stock'
+  | 'slips'
+  | 'staff'
+  | 'devices'
+  | 'shops'
 export type ThemeChoice = 'light' | 'dark' | 'system'
 
 /** localStorage keys of the shell preferences. */
@@ -26,6 +35,7 @@ const SIDEBAR_KEY = 'owner.sidebar'
 export const PAGE_TITLES: Record<OwnerPage, string> = {
   report: 'สรุปยอด',
   orders: 'บิลรายวัน',
+  members: 'สมาชิก',
   menu: 'เมนู',
   stock: 'สต็อก',
   slips: 'สลิปซื้อของ',
@@ -40,6 +50,7 @@ const NAV: Array<{ label: string; items: Array<{ id: OwnerPage; icon: IconName }
     items: [
       { id: 'report', icon: 'chart' },
       { id: 'orders', icon: 'receipt' },
+      { id: 'members', icon: 'card' },
     ],
   },
   {
@@ -73,6 +84,7 @@ const THEMES: Array<{ id: ThemeChoice; label: string; icon: IconName }> = [
 type IconName =
   | 'chart'
   | 'receipt'
+  | 'card'
   | 'bowl'
   | 'box'
   | 'slip'
@@ -101,6 +113,16 @@ const ICONS: Record<IconName, ReactNode> = {
       <path d="M6 3h12v18l-3-1.8-3 1.8-3-1.8L6 21z" />
       <path d="M9.5 8.5h5" />
       <path d="M9.5 12.5h5" />
+    </>
+  ),
+  // a member card: card outline + a person + the points lines
+  card: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2.5" />
+      <circle cx="8.4" cy="10.6" r="1.7" />
+      <path d="M5.9 15.4c.4-1.2 1.4-1.9 2.5-1.9s2.1.7 2.5 1.9" />
+      <path d="M14.5 10.5h4" />
+      <path d="M14.5 13.5h4" />
     </>
   ),
   bowl: (

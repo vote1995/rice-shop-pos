@@ -10,7 +10,7 @@
 //! - [`cors`]   — opt-in allowlist CORS for the Capacitor Android staff POS
 
 use axum::{
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Router,
 };
 use tower_service::Service;
@@ -22,6 +22,7 @@ mod cors;
 mod db;
 mod error;
 mod extract;
+mod loyalty;
 mod media;
 mod pricing;
 mod slips;
@@ -41,6 +42,11 @@ pub fn router(env: Env) -> Router {
 
     let api = Router::new()
         .route("/health", get(routes::health::health))
+        .route("/public/join/{shop_id}", get(routes::members::join_info).post(routes::members::join))
+        .route("/members/lookup", post(routes::members::lookup))
+        .route("/orders/{id}/member", put(routes::members::set_member))
+        .route("/owner/shops/{shop_id}/customers", get(routes::members::owner_list))
+        .route("/owner/customers/{id}", delete(routes::members::owner_delete))
         // Device lifecycle + staff PIN login: public in the sense that they
         // authenticate with the device token / session token, not owner auth.
         .route("/device/register", post(routes::device::register))
@@ -238,5 +244,8 @@ async fn fetch(
 async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
     if let Err(e) = slips::sweep(&env).await {
         console_error!("slip sweep failed: {e:?}");
+    }
+    if let Err(e) = loyalty::sweep_if_due(&env).await {
+        console_error!("loyalty sweep failed: {e:?}");
     }
 }

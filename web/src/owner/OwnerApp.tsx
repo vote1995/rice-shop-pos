@@ -7,6 +7,7 @@ import StockPanel from './StockPanel'
 import SlipsPanel from './SlipsPanel'
 import OrdersPanel from './OrdersPanel'
 import ReportPanel from './ReportPanel'
+import MembersPanel from './MembersPanel'
 import { Shell, useOwnerTheme } from './Shell'
 import type { OwnerPage } from './Shell'
 import { OwnerShopProvider, useOwnerShop } from './shopContext'
@@ -85,6 +86,7 @@ export default function OwnerApp() {
         ) : null}
         {page === 'report' ? <ReportPanel /> : null}
         {page === 'orders' ? <OrdersPanel /> : null}
+        {page === 'members' ? <MembersPanel /> : null}
         {page === 'menu' ? <MenuEditor /> : null}
         {page === 'stock' ? <StockPanel /> : null}
         {page === 'slips' ? <SlipsPanel /> : null}

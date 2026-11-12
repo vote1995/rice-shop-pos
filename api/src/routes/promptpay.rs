@@ -170,24 +170,29 @@ async fn settle(env: &Env, payment_id: &str, beam_amount: Option<i64>) -> Result
     }
     let now = now_ms();
     let d = db::db(env)?;
-    let results = d
-        .batch(vec![
-            // 'expired' too: the QR timed out on our side but the money is real.
-            d.prepare(
-                "UPDATE payments SET status = 'succeeded', confirmed_by = 'webhook',
-                        confirmed_at = ?2, updated_at = ?2
-                 WHERE id = ?1 AND method = 'promptpay' AND status IN ('pending', 'expired')",
-            )
-            .bind(&[txt(payment_id), int(now)])?,
-            d.prepare(
-                "UPDATE orders SET status = 'paid', paid_at = ?3, closed_at = ?3, updated_at = ?3
-                 WHERE id = ?2 AND status IN ('preparing', 'served') AND total_amount = ?4
-                   AND EXISTS (SELECT 1 FROM payments WHERE id = ?1 AND status = 'succeeded')",
-            )
-            .bind(&[txt(payment_id), txt(&p.order_id), int(now), int(p.amount)])?,
-        ])
-        .await?;
-    if results.last().map(changes).transpose()?.unwrap_or(0) == 0 {
+    // The loyalty settle statements run after the paid-UPDATE inside this same
+    // batch (so a member's points move exactly when the QR payment did) and
+    // are no-ops for a bill without a member.
+    let mut statements = vec![
+        // 'expired' too: the QR timed out on our side but the money is real.
+        d.prepare(
+            "UPDATE payments SET status = 'succeeded', confirmed_by = 'webhook',
+                    confirmed_at = ?2, updated_at = ?2
+             WHERE id = ?1 AND method = 'promptpay' AND status IN ('pending', 'expired')",
+        )
+        .bind(&[txt(payment_id), int(now)])?,
+        d.prepare(
+            "UPDATE orders SET status = 'paid', paid_at = ?3, closed_at = ?3, updated_at = ?3
+             WHERE id = ?2 AND status IN ('preparing', 'served') AND total_amount = ?4
+               AND EXISTS (SELECT 1 FROM payments WHERE id = ?1 AND status = 'succeeded')",
+        )
+        .bind(&[txt(payment_id), txt(&p.order_id), int(now), int(p.amount)])?,
+    ];
+    statements.extend(crate::loyalty::settle_statements(env, &p.order_id, now)?);
+    let results = d.batch(statements).await?;
+    // Index 1 is the paid-UPDATE (statement 0 is the payment, the settle
+    // statements follow it).
+    if results.get(1).map(changes).transpose()?.unwrap_or(0) == 0 {
         // Paid twice (e.g. cash after the QR) or the bill changed: the money
         // is recorded on the payment; the owner sorts it out (refund in Beam).
         worker::console_warn!(

@@ -1534,3 +1534,208 @@ body:has(.pos[data-theme="dark"]) { background: #0f1012; }
 .pay-sheet .pos-qr { gap: 6px; }
 .pay-sheet .pos-qr-amount { font-size: 1.4rem; }
 .bl-line-type { font-weight: 500; color: var(--muted); font-size: 0.85rem; }
+
+/* ==========================================================================
+   PUBLIC join page (members) — the `.join` scope of join/JoinPage.tsx
+   (/join/{shop_id} on any host). A customer opens it on their own phone from
+   the shop's printed QR: no login, no service worker, no theme switch. Own
+   neutral tokens (same values as the .pos/.owner scopes); dark follows the
+   OS through prefers-color-scheme. Everything mobile-first: one centred card,
+   ≥50px touch targets.
+   ========================================================================== */
+
+.join {
+  --bg: #f6f6f7;
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --border: #ececee;
+  --text: #18181b;
+  --muted: #71717a;
+  --accent: #ea580c;
+  --accent-strong: #c2410c;
+  --accent-soft: #fff1e8;
+  --danger: #dc2626;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.04);
+
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 16px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  .join {
+    --bg: #0f1012;
+    --surface: #18191c;
+    --surface-2: #1f2024;
+    --border: #2a2b30;
+    --text: #f1f1f3;
+    --muted: #a1a1aa;
+    --accent: #fb923c;
+    --accent-strong: #fdba74;
+    --accent-soft: #3a2214;
+    --danger: #f87171;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+/* the page behind the app, so overscroll matches the theme */
+body:has(.join) { background: #f6f6f7; }
+@media (prefers-color-scheme: dark) {
+  body:has(.join) { background: #0f1012; }
+}
+
+.join .muted { color: var(--muted); }
+.join .error { color: var(--danger); font-weight: 600; }
+.join .spinner { border-color: var(--border); border-top-color: var(--accent); }
+
+/* the centred column: the card keeps its room and scrolls when tall */
+.join-main {
+  min-height: 100dvh; width: 100%; max-width: 480px; margin: 0 auto;
+  display: flex; flex-direction: column; justify-content: center;
+  padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
+}
+.join-card {
+  display: flex; flex-direction: column; gap: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 24px 20px;
+  box-shadow: var(--shadow);
+}
+.join h1 { margin: 0; font-size: 1.4rem; font-weight: 800; letter-spacing: -0.01em; }
+.join .join-shop {
+  margin: 0; font-size: 0.8rem; font-weight: 700;
+  letter-spacing: 0.04em; color: var(--accent-strong);
+}
+
+/* form: keep the global big touch targets, re-theme the surfaces */
+.join label { gap: 6px; font-size: 0.85rem; font-weight: 700; color: var(--muted); }
+.join input {
+  min-height: 50px;
+  font-size: 1rem; font-weight: 400; color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 12px;
+}
+.join input::placeholder { color: var(--muted); opacity: 0.8; }
+.join input:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.join .join-btn {
+  min-height: 50px; border-radius: 14px;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+  font-weight: 700;
+}
+.join .join-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) {
+  .join .join-btn.primary { color: #241403; }
+}
+.join .join-btn.big { min-height: 56px; font-size: 1.05rem; }
+
+/* the PDPA notice box (controller = the shop name) */
+.join-notice {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 14px;
+}
+.join-notice h2 { margin: 0; font-size: 0.95rem; font-weight: 700; }
+.join-notice ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.join-notice li { font-size: 0.9rem; line-height: 1.5; }
+.join-notice li strong { color: var(--accent-strong); }
+
+/* step 3: the thank-you check */
+.join-check {
+  width: 64px; height: 64px; border-radius: 50%;
+  display: grid; place-items: center; margin: 4px auto 0;
+  background: var(--accent-soft); color: var(--accent-strong);
+  font-size: 2rem; font-weight: 800; line-height: 1;
+}
+.join-lead { font-size: 1.05rem; font-weight: 600; text-align: center; }
+
+/* ==========================================================================
+   OWNER members panel (members) — the .mem-* classes of owner/MembersPanel.tsx
+   ("สมาชิก": the printable join QR + the searchable member list). Scoped to
+   .owner with token-only colours, so light and dark both work. Wide screens
+   put the QR card beside the list; phones stack them.
+   ========================================================================== */
+
+.owner .mem-cols { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.owner .mem-join { gap: 10px; align-items: stretch; }
+/* the QR stays on a white plate so it scans in both themes */
+.owner .mem-qr {
+  align-self: center;
+  background: #fff; border: 1px solid var(--border); border-radius: 16px;
+  padding: 12px; line-height: 0;
+}
+.owner .mem-link {
+  margin: 0; overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.8rem; color: var(--muted);
+}
+.owner .mem-list-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.owner .mem-tools { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: flex-end; }
+/* the inline PDPA-erasure confirm of one row */
+.owner .mem-confirm {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px; border-radius: 12px;
+  background: var(--danger-soft); border: 1px solid transparent;
+}
+.owner .mem-confirm .small { line-height: 1.45; }
+.owner .mem-confirm strong { color: var(--danger); }
+
+@media (min-width: 900px) {
+  .owner .mem-cols { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; align-items: start; }
+}
+
+/* ==========================================================================
+   STAFF POS pay sheet: member step (สมาชิก) — the phone lookup + points
+   stepper card of Counter's PaySheet, plus the compact "สมาชิก" row on the
+   payment card and the queue chip. Scoped to .pos, token-only colours.
+   ========================================================================== */
+
+/* one line: the member (or "ไม่มีสมาชิก") left, the edit button right */
+.pos .pay-member-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
+  min-height: 44px;
+}
+.pos .pay-member-name {
+  flex: 1 1 120px; min-width: 0; font-size: 0.92rem; font-weight: 600;
+  line-height: 1.35; overflow-wrap: anywhere;
+}
+.pos .pay-member-edit {
+  flex: none; min-height: 44px; padding: 4px 14px; border-radius: 999px;
+  background: var(--surface-2); color: var(--accent-strong);
+  font-size: 0.88rem;
+}
+
+/* the −10 / +10 points stepper: big round buttons, the value in tabular digits */
+.pos .pay-member-stepper {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px;
+}
+.pos .pay-member-stepctl { display: flex; align-items: center; gap: 8px; }
+.pos .pay-member-stepctl button {
+  flex: none; width: 48px; min-width: 48px; height: 44px; min-height: 44px; padding: 0;
+  display: grid; place-items: center; border-radius: 50%;
+  background: var(--surface-2); font-size: 1.35rem; font-weight: 700; line-height: 1;
+}
+.pos .pay-member-stepval {
+  min-width: 52px; text-align: center;
+  font-size: 1.25rem; font-weight: 800; font-variant-numeric: tabular-nums;
+}
+
+/* "ข้าม" — the always-available way past the member step */
+.pos .pay-member-skip {
+  width: 100%; min-height: 48px; border-radius: 12px;
+  background: var(--surface-2); color: var(--muted);
+  font-size: 0.95rem; font-weight: 600;
+}
+
+/* the queue card chip: this bill belongs to a member */
+.pos .pos-member-chip {
+  flex: none; max-width: 40%; padding: 2px 8px; border-radius: 999px;
+  font-size: 12px; font-weight: 700;
+  background: var(--success-soft); color: var(--success);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}

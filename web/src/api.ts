@@ -545,6 +545,16 @@ export interface Order {
   /** สวัสดิการพนักงาน: the staff member's own plate, billed 0 and never
    *  counted as a sale (migration 0007). */
   staff_meal: boolean
+  /** members/loyalty (0011): the attached customer, or null = no member. */
+  customer_id: string | null
+  /** "{first_name} {last_name}" of customer_id (null when there is none). */
+  member_name: string | null
+  /** points reserved on this open bill; only deducted when it is paid. */
+  points_redeemed: number
+  /** points earned, set once when the payment succeeds. */
+  points_earned: number
+  /** the member's CURRENT balance (null when there is no member). */
+  member_points: number | null
   items: OrderItem[]
 }
 
@@ -760,4 +770,60 @@ export interface SlipReaderState {
 export interface SlipsData {
   reader: SlipReaderState
   slips: Slip[]
+}
+
+// ---- members + loyalty points (docs/members-spec.md) ----
+
+/**
+ * GET /api/public/join/{shop_id} (no auth) — the public join page data: the
+ * shop name (the PDPA data controller shown in the notice) and the consent
+ * version the server expects POSTed back with the submission.
+ */
+export interface PublicShopInfo {
+  shop_name: string
+  consent_version: string
+}
+
+/**
+ * One row of GET /api/owner/shops/{shop_id}/customers?q= — `updated_at` is the
+ * member's LAST service use (a paid bill), unix ms like the rest of the owner
+ * API; it drives point expiry (6 months) and PDPA erasure (1 year).
+ */
+export interface OwnerCustomer {
+  id: string
+  first_name: string
+  last_name: string
+  phone: string
+  points: number
+  consent_at: number
+  updated_at: number
+}
+
+/**
+ * The `customer` object of POST /api/members/lookup. `points` is the member's
+ * balance; `available_points` additionally subtracts the points already
+ * reserved by the member's OTHER open counter bills (ignoring `order_id`
+ * itself), and is what a redemption on this bill is capped by.
+ */
+export interface MemberLookup {
+  id: string
+  first_name: string
+  last_name: string
+  phone_last4: string
+  points: number
+  available_points: number
+}
+
+/** POST /api/members/lookup body `{ phone, order_id? }` -> `{ customer }`. */
+export interface MemberLookupResult {
+  customer: MemberLookup
+}
+
+/**
+ * PUT /api/orders/{id}/member body: attach/detach a member and set the points
+ * to redeem on this bill (multiple of 10; `customer_id: null` detaches).
+ */
+export interface OrderMemberBody {
+  customer_id: string | null
+  points: number
 }
