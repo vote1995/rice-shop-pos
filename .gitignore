@@ -21,3 +21,6 @@ dist/
 # Slip reader agent local config
 tools/slip-agent/.env
 tools/slip-agent/agent.log
+
+# printable member-signup QR codes (contain shop ids; keep local)
+member-signup-qr*
