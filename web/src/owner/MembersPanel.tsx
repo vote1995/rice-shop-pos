@@ -221,7 +221,7 @@ export function MembersPanel() {
                 <div className="item mem-item" key={c.id}>
                   <div className="row">
                     <strong className="grow">
-                      {c.first_name} {c.last_name}
+                      {c.nickname}
                     </strong>
                     <span className={`badge${c.points > 0 ? ' approved' : ''}`}>{c.points} แต้ม</span>
                   </div>
@@ -232,7 +232,7 @@ export function MembersPanel() {
                   {confirmId === c.id ? (
                     <div className="mem-confirm">
                       <p className="small">
-                        ลบข้อมูลของ "{c.first_name}" ตามสิทธิ์ขอเพิกถอน/ลบข้อมูลส่วนบุคคล (PDPA)?
+                        ลบข้อมูลของ "{c.nickname}" ตามสิทธิ์ขอเพิกถอน/ลบข้อมูลส่วนบุคคล (PDPA)?
                         ระบบจะลบชื่อ-เบอร์โทร ประวัติแต้มทั้งหมด และแยกชื่อสมาชิกออกจากบิลเก่า —
                         <strong> ทำแล้วย้อนกลับไม่ได้</strong>
                       </p>

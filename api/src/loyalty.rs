@@ -43,7 +43,7 @@ use crate::util::{int, now_ms, txt};
 /// join page shows the notice of exactly this version and posts it back; a
 /// join with any other version is refused, so the stored consent always names
 /// the notice the member actually read.
-pub const CONSENT_VERSION: &str = "2026-11-v1";
+pub const CONSENT_VERSION: &str = "2026-11-v2";
 
 /// Points expire after 6 months (183 days) without a paid bill. The clock is
 /// `customers.updated_at`, changed ONLY by [`settle_statements`].
@@ -58,7 +58,7 @@ pub const DELETE_AFTER_MS: i64 = 365 * 86_400_000;
 /// drains over the next hours.
 const SWEEP_LIMIT: i64 = 200;
 
-/// first_name / last_name bound, in characters (Thai names are multibyte;
+/// nickname bound, in characters (Thai names are multibyte;
 /// SQLite `length()` counts characters too, so the CHECK of migration 0011
 /// agrees with [`clean_name`]).
 const MAX_NAME_CHARS: usize = 60;
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn constants_match_the_notice_and_the_schema() {
-        assert_eq!(CONSENT_VERSION, "2026-11-v1");
+        assert_eq!(CONSENT_VERSION, "2026-11-v2");
         // 6 months / 1 year of no use, as the PDPA notice words it.
         assert_eq!(EXPIRE_AFTER_MS, 183 * 86_400_000);
         assert_eq!(DELETE_AFTER_MS, 365 * 86_400_000);

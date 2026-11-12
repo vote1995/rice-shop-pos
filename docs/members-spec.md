@@ -31,22 +31,22 @@ Money is **satang**; 1 point = ฿1 = 100 satang. Schema: `api/migrations/0011_m
   with status `pending` exists for it; a paid/cancelled bill is refused with 409.
 
 ## Customer-facing PDPA notice
-`CONSENT_VERSION = "2026-11-v1"` (same constant in web and api). Notice (Thai) says: controller = the shop name;
-data collected = first name, last name, phone number; purpose = membership, earning/using points; kept while the
+`CONSENT_VERSION = "2026-11-v2"` (same constant in web and api). Notice (Thai) says: controller = the shop name;
+data collected = nickname and phone number (no real name); purpose = membership, earning/using points; kept while the
 member uses the service — points are cleared after 6 months of no use and the data is deleted after 1 year of no
 use; never sold/shared with third parties; rights = access, correct, delete, withdraw consent by telling the shop.
 
 ## API contract
 ### Public (no auth, same origin) — `routes/members.rs`
 - `GET  /api/public/join/{shop_id}` → `{ "shop_name": string, "consent_version": string }` · 404 unknown shop.
-- `POST /api/public/join/{shop_id}` body `{ first_name, last_name, phone, consent: true, consent_version }`
+- `POST /api/public/join/{shop_id}` body `{ nickname, phone, consent: true, consent_version }`
   → `200 { "ok": true }`. Same response whether the phone already exists (never reveal membership; existing row
   untouched). 400 on invalid input / `consent` not true / wrong `consent_version`.
   Validation: names trimmed, 1–60 chars, no control characters; phone normalised (strip spaces/dashes,
   `+66`/`66` prefix → `0`) must match `^0[689]\d{8}$`.
 ### Staff (`StaffAuth`, shop = session shop) 
 - `POST /api/members/lookup` body `{ phone, order_id? }` →
-  `{ "customer": { "id", "first_name", "last_name", "phone_last4", "points", "available_points" } }`;
+  `{ "customer": { "id", "nickname", "phone_last4", "points", "available_points" } }`;
   `404` code `member_not_found`. `available_points` ignores reservations of `order_id` itself.
 - `PUT /api/orders/{id}/member` body `{ customer_id: string | null, points: number }` → the updated `OrderJson`.
   `customer_id: null` detaches (points 0). Errors: 400 invalid points, 404 member, 409 `qr_pending` / order closed /
@@ -54,13 +54,13 @@ use; never sold/shared with third parties; rights = access, correct, delete, wit
 - `OrderJson` gains: `customer_id: string|null`, `member_name: string|null`, `points_redeemed: number`,
   `points_earned: number`, `member_points: number|null` (the member's CURRENT balance).
 ### Owner (`OwnerAuth`)
-- `GET    /api/owner/shops/{shop_id}/customers?q=` → `{ customers: [{ id, first_name, last_name, phone, points,
+- `GET    /api/owner/shops/{shop_id}/customers?q=` → `{ customers: [{ id, nickname, phone, points,
   consent_at, updated_at }] }` (q matches phone digits or name, max 100, newest `updated_at` first).
 - `DELETE /api/owner/customers/{id}` → erasure on request (same batch as the 1-year sweep) → `{ "ok": true }`.
 
 ## Web
 - Public page `/join/{shop_id}` (works on the POS host; no login): step 1 PDPA notice + "ยอมรับ" button →
-  step 2 form (ชื่อ, นามสกุล, เบอร์โทร) → step 3 thank-you: "ครั้งต่อไปแจ้งเบอร์โทรกับพนักงานที่ร้านได้เลย".
+  step 2 form (ชื่อเล่น, เบอร์โทร) → step 3 thank-you: "ครั้งต่อไปแจ้งเบอร์โทรกับพนักงานที่ร้านได้เลย".
 - Owner page "สมาชิก": the QR code (and copyable link) of `https://<host>/join/{shop_id}` for printing,
   member list with search, delete-member button (with confirmation).
 - Staff pay sheet (`PaySheet`): before the payment screen a **member step** (phone input, "ข้าม"); after lookup

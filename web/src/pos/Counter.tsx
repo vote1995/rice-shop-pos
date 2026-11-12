@@ -2566,7 +2566,7 @@ function PaySheet({
               <>
                 <div className="pay-member-row">
                   <span className="pay-member-name">
-                    {member.first_name} {member.last_name} · เบอร์ลงท้าย {member.phone_last4}
+                    {member.nickname} · เบอร์ลงท้าย {member.phone_last4}
                   </span>
                 </div>
                 <div className="pay-sum-row">

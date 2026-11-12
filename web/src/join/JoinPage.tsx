@@ -4,7 +4,7 @@
 //! a customer scanning the shop's QR opens it with no login, no service worker
 //! (no PWA install prompt on a phone) and no POS chrome. Three steps:
 //!   1. the PDPA notice (the shop is the data controller) + one big "ยอมรับ" button,
-//!   2. the form (ชื่อ / นามสกุล / เบอร์โทร) validated with the server's rules,
+//!   2. the form (ชื่อเล่น / เบอร์โทร) validated with the server's rules,
 //!   3. the thank-you screen.
 //!
 //! Both calls go through the shared api() helper in its default no-auth mode
@@ -164,7 +164,7 @@ function Notice({ shopName, onAccept }: { shopName: string; onAccept: () => void
             <strong>ผู้ควบคุมข้อมูล:</strong> ร้าน{shopName}
           </li>
           <li>
-            <strong>ข้อมูลที่เก็บ:</strong> ชื่อ นามสกุล และเบอร์โทรศัพท์
+            <strong>ข้อมูลที่เก็บ:</strong> ชื่อเล่น และเบอร์โทรศัพท์ (ไม่เก็บชื่อ-นามสกุลจริง)
           </li>
           <li>
             <strong>วัตถุประสงค์:</strong> เป็นสมาชิกของร้าน เพื่อสะสมแต้มและใช้แต้มแลกรับส่วนลด
@@ -202,25 +202,18 @@ function JoinForm({
   consentVersion: string
   onDone: () => void
 }) {
-  const [firstName, setFirstName] = useState('')
-  const [lastName, setLastName] = useState('')
+  const [nickname, setNickname] = useState('')
   const [phone, setPhone] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
   async function submit(e: FormEvent) {
     e.preventDefault()
-    const first = firstName.trim()
-    const last = lastName.trim()
+    const nick = nickname.trim()
     const p = normalizePhone(phone)
-    const firstErr = nameError(firstName)
-    if (firstErr !== null) {
-      setErr(`ชื่อ: ${firstErr}`)
-      return
-    }
-    const lastErr = nameError(lastName)
-    if (lastErr !== null) {
-      setErr(`นามสกุล: ${lastErr}`)
+    const nickErr = nameError(nickname)
+    if (nickErr !== null) {
+      setErr(`ชื่อเล่น: ${nickErr}`)
       return
     }
     if (!PHONE_RE.test(p)) {
@@ -232,8 +225,7 @@ function JoinForm({
     try {
       // consent_version is what the SERVER handed us in step 1, never a constant
       await api('POST', `/api/public/join/${encodeURIComponent(shopId)}`, {
-        first_name: first,
-        last_name: last,
+        nickname: nick,
         phone: p,
         consent: true,
         consent_version: consentVersion,
@@ -241,7 +233,7 @@ function JoinForm({
       onDone()
     } catch (e2) {
       // 400 = the server rejected the input; anything else is a retryable hiccup
-      setErr(e2 instanceof ApiError && e2.status === 400 ? 'ข้อมูลไม่ถูกต้อง กรุณาตรวจสอบชื่อและเบอร์โทรอีกครั้ง' : friendlyError(e2))
+      setErr(e2 instanceof ApiError && e2.status === 400 ? 'ข้อมูลไม่ถูกต้อง กรุณาตรวจสอบชื่อเล่นและเบอร์โทรอีกครั้ง' : friendlyError(e2))
     } finally {
       setBusy(false)
     }
@@ -252,25 +244,13 @@ function JoinForm({
       <p className="join-shop">สมัครสมาชิก</p>
       <h1>กรอกข้อมูลของคุณ</h1>
       <label>
-        ชื่อ
+        ชื่อเล่น
         <input
-          value={firstName}
-          onChange={(e) => setFirstName(e.target.value)}
-          autoComplete="given-name"
+          value={nickname}
+          onChange={(e) => setNickname(e.target.value)}
+          autoComplete="nickname"
           maxLength={60}
-          placeholder="เช่น สมชาย"
-          disabled={busy}
-          required
-        />
-      </label>
-      <label>
-        นามสกุล
-        <input
-          value={lastName}
-          onChange={(e) => setLastName(e.target.value)}
-          autoComplete="family-name"
-          maxLength={80}
-          placeholder="เช่น ใจดี"
+          placeholder="เช่น เล็ก"
           disabled={busy}
           required
         />

@@ -547,7 +547,7 @@ export interface Order {
   staff_meal: boolean
   /** members/loyalty (0011): the attached customer, or null = no member. */
   customer_id: string | null
-  /** "{first_name} {last_name}" of customer_id (null when there is none). */
+  /** the nickname of customer_id (null when there is none). */
   member_name: string | null
   /** points reserved on this open bill; only deducted when it is paid. */
   points_redeemed: number
@@ -780,8 +780,7 @@ export interface PublicShopInfo {
  */
 export interface OwnerCustomer {
   id: string
-  first_name: string
-  last_name: string
+  nickname: string
   phone: string
   points: number
   consent_at: number
@@ -796,8 +795,7 @@ export interface OwnerCustomer {
  */
 export interface MemberLookup {
   id: string
-  first_name: string
-  last_name: string
+  nickname: string
   phone_last4: string
   points: number
   available_points: number

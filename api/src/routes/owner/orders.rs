@@ -65,7 +65,7 @@ const MAX_DAY_ORDERS: i64 = 500;
 const ORDER_COLUMNS: &str = "id, queue_number, order_type, channel, table_no, note, status, \
      total_amount, discount_amount, created_by, created_at, paid_at, cancelled_at, cancel_reason, \
      served_at, staff_meal, customer_id, points_redeemed, points_earned, \
-     (SELECT c.first_name || ' ' || c.last_name FROM customers c WHERE c.id = orders.customer_id) \
+     (SELECT c.nickname FROM customers c WHERE c.id = orders.customer_id) \
        AS member_name, \
      (SELECT c.points FROM customers c WHERE c.id = orders.customer_id) AS member_points";
 const ITEM_COLUMNS: &str = "id, order_id, menu_item_id, item_name, options_json, quantity, \

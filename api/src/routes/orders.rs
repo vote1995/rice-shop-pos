@@ -106,7 +106,7 @@ const OPTION_COLUMNS: &str = "id, shop_id, option_group_id, name, price_add, sol
 const ORDER_COLUMNS: &str = "id, queue_number, order_type, channel, table_no, note, status, \
      total_amount, discount_amount, created_by, created_at, paid_at, cancelled_at, cancel_reason, \
      served_at, staff_meal, customer_id, points_redeemed, points_earned, \
-     (SELECT c.first_name || ' ' || c.last_name FROM customers c WHERE c.id = orders.customer_id) \
+     (SELECT c.nickname FROM customers c WHERE c.id = orders.customer_id) \
        AS member_name, \
      (SELECT c.points FROM customers c WHERE c.id = orders.customer_id) AS member_points";
 /// One order_items row: the JSON fields plus `order_id` to group lines under

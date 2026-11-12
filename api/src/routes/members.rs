@@ -61,7 +61,7 @@ const MAX_PHONE_INPUT_CHARS: usize = 32;
 /// bill the caller is about to edit reads its own reservation as still
 /// available — `?1` NULL counts every open bill). A scalar subquery, not a
 /// JOIN: the customer row count cannot change.
-const CUSTOMER_COLUMNS: &str = "id, first_name, last_name, phone, points, \
+const CUSTOMER_COLUMNS: &str = "id, nickname, phone, points, \
      COALESCE((SELECT SUM(o.points_redeemed) FROM orders o \
                WHERE o.customer_id = customers.id AND o.channel = 'counter' \
                  AND o.status IN ('preparing', 'served') AND o.id IS NOT ?1), 0) AS reserved";
@@ -72,12 +72,11 @@ const CUSTOMER_COLUMNS: &str = "id, first_name, last_name, phone, points, \
 
 /// `POST /public/join/{shop_id}` body: the PDPA consent the member accepted
 /// (`consent: true` + the version the notice was shown under) plus the data
-/// the notice names (first/last name, phone).
+/// the notice names (nickname, phone).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct JoinBody {
-    pub first_name: String,
-    pub last_name: String,
+    pub nickname: String,
     pub phone: String,
     pub consent: bool,
     pub consent_version: String,
@@ -105,8 +104,7 @@ pub struct LookupBody {
 #[derive(Debug, Serialize)]
 pub struct MemberJson {
     pub id: String,
-    pub first_name: String,
-    pub last_name: String,
+    pub nickname: String,
     pub phone_last4: String,
     pub points: i64,
     pub available_points: i64,
@@ -132,8 +130,7 @@ pub struct OrderMemberBody {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OwnerCustomerRow {
     id: String,
-    first_name: String,
-    last_name: String,
+    nickname: String,
     phone: String,
     points: i64,
     consent_at: i64,
@@ -152,8 +149,7 @@ pub struct CustomersJson {
 #[derive(Debug, Deserialize)]
 struct CustomerRow {
     id: String,
-    first_name: String,
-    last_name: String,
+    nickname: String,
     phone: String,
     points: i64,
     reserved: i64,
@@ -359,11 +355,8 @@ pub async fn join(
             loyalty::CONSENT_VERSION
         )));
     }
-    let first_name = loyalty::clean_name(&body.first_name).ok_or_else(|| {
-        ApiError::BadRequest("first_name must be 1-60 characters, no control characters".into())
-    })?;
-    let last_name = loyalty::clean_name(&body.last_name).ok_or_else(|| {
-        ApiError::BadRequest("last_name must be 1-60 characters, no control characters".into())
+    let nickname = loyalty::clean_name(&body.nickname).ok_or_else(|| {
+        ApiError::BadRequest("nickname must be 1-60 characters, no control characters".into())
     })?;
     let phone = clean_phone(&body.phone)?;
 
@@ -376,16 +369,15 @@ pub async fn join(
     db::db(&state.env)?
         .prepare(
             "INSERT INTO customers
-               (id, shop_id, first_name, last_name, phone, points,
+               (id, shop_id, nickname, phone, points,
                 consent_version, consent_at, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?7, ?7)
+             VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?6, ?6)
              ON CONFLICT(shop_id, phone) DO NOTHING",
         )
         .bind(&[
             txt(&id),
             txt(&shop_id),
-            txt(&first_name),
-            txt(&last_name),
+            txt(&nickname),
             txt(&phone),
             txt(loyalty::CONSENT_VERSION),
             int(now),
@@ -423,8 +415,7 @@ pub async fn lookup(
     Ok(Json(LookupJson {
         customer: MemberJson {
             id: row.id,
-            first_name: row.first_name,
-            last_name: row.last_name,
+            nickname: row.nickname,
             phone_last4: phone_last4(&row.phone),
             points: row.points,
             available_points: available_points(row.points, row.reserved),
@@ -589,10 +580,10 @@ pub async fn owner_list(
         .map(like_pattern);
     let customers = db::db(&state.env)?
         .prepare(format!(
-            "SELECT id, first_name, last_name, phone, points, consent_at, updated_at
+            "SELECT id, nickname, phone, points, consent_at, updated_at
              FROM customers
              WHERE shop_id = ?1
-               AND (?2 IS NULL OR first_name LIKE ?2 ESCAPE '\\' OR last_name LIKE ?2 ESCAPE '\\')
+               AND (?2 IS NULL OR nickname LIKE ?2 ESCAPE '\\')
                AND (?3 IS NULL OR phone LIKE ?3 ESCAPE '\\')
              ORDER BY updated_at DESC, id DESC
              LIMIT {MAX_CUSTOMERS}"
