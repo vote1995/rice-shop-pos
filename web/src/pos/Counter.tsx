@@ -1802,6 +1802,9 @@ export default function Counter({
           return (
             <div key={it.id} style={{ fontSize: 15, lineHeight: 1.4 }}>
               {it.quantity}× {it.item_name}
+              {it.options.length === 1 && it.options[0].name === it.item_name && quickTypeOf[it.options[0].id] ? (
+                <span className="muted"> · {quickTypeOf[it.options[0].id]}</span>
+              ) : null}
               {opts ? ` ${opts}` : ''}
               {it.note ? <span className="muted"> ({it.note})</span> : null}
             </div>
