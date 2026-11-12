@@ -465,7 +465,7 @@ export function Shell({
           <span className="brand-row">
             <img className="brand-logo" src="/logo.png" alt="" width={36} height={36} />
             <span className="brand-name">
-              WvY POS
+              WyV POS
               <small>แดชบอร์ดเจ้าของร้าน</small>
             </span>
           </span>

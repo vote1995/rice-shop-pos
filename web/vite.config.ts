@@ -14,7 +14,7 @@ export default defineConfig({
       injectRegister: false,
       includeAssets: ['favicon-48.png', 'apple-touch-icon.png'],
       manifest: {
-        name: 'WvY POS',
+        name: 'WyV POS',
         short_name: 'POS',
         description: 'ระบบขายหน้าร้านสำหรับร้านข้าว',
         lang: 'th',

@@ -60,7 +60,7 @@ export default function OwnerApp() {
         <div className="screen">
           <main className="content">
             <div className="card center">
-              <h1>WvY POS · เจ้าของ</h1>
+              <h1>WyV POS · เจ้าของ</h1>
               <p className="error">บัญชีนี้ไม่มีสิทธิ์เจ้าของร้าน</p>
             </div>
           </main>

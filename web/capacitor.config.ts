@@ -8,7 +8,7 @@ import type { CapacitorConfig } from '@capacitor/cli'
  */
 const config: CapacitorConfig = {
   appId: 'win.twostackmaxgame.pos',
-  appName: 'WvY POS',
+  appName: 'WyV POS',
   webDir: 'dist',
   server: {
     // Local origin becomes https://localhost (no cleartext http://localhost).

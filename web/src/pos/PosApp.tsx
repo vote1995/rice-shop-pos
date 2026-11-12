@@ -341,7 +341,7 @@ export default function PosApp() {
               <span className="pos-auth-mark" aria-hidden="true">
                 <img src="/logo.png" alt="" width={40} height={40} />
               </span>
-              <h1 className="pos-auth-title">WvY POS</h1>
+              <h1 className="pos-auth-title">WyV POS</h1>
               {shopName ? <p className="pos-auth-shop muted">ร้าน {shopName}</p> : null}
             </div>
             <div className="pos-auth-fields center">
@@ -368,7 +368,7 @@ export default function PosApp() {
               <span className="pos-auth-mark" aria-hidden="true">
                 <img src="/logo.png" alt="" width={40} height={40} />
               </span>
-              <h1 className="pos-auth-title">WvY POS</h1>
+              <h1 className="pos-auth-title">WyV POS</h1>
               {shopName ? <p className="pos-auth-shop muted">ร้าน {shopName}</p> : null}
             </div>
             <div className="pos-auth-fields">
@@ -408,7 +408,7 @@ export default function PosApp() {
               <span className="pos-auth-mark" aria-hidden="true">
                 <img src="/logo.png" alt="" width={40} height={40} />
               </span>
-              <h1 className="pos-auth-title">WvY POS</h1>
+              <h1 className="pos-auth-title">WyV POS</h1>
               {shopName ? <p className="pos-auth-shop muted">ร้าน {shopName}</p> : null}
             </div>
             <div className="pos-auth-fields center">
@@ -439,7 +439,7 @@ export default function PosApp() {
               <span className="pos-auth-mark" aria-hidden="true">
                 <img src="/logo.png" alt="" width={40} height={40} />
               </span>
-              <h1 className="pos-auth-title">WvY POS</h1>
+              <h1 className="pos-auth-title">WyV POS</h1>
               {shopName ? <p className="pos-auth-shop muted">ร้าน {shopName}</p> : null}
             </div>
             <div className="pos-auth-fields">
@@ -557,7 +557,7 @@ export default function PosApp() {
           <span className="pos-bar-id">
             <span className="brand">
               <img className="brand-icon" src="/logo.png" alt="" width={24} height={24} />
-              WvY POS
+              WyV POS
             </span>
             <span className="pos-bar-context">
               {shopName ? `ร้าน ${shopName} · ${me.name}` : me.name}
