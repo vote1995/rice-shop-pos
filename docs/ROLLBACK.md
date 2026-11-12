@@ -27,3 +27,9 @@ this project, so that deploy would fail.
 ## Stable markers
 - `stable-v0.1.6` (commit `f59e0d7`, production v0.1.6) and branch `release/stable` — the current stable version.
 - `stable-v1.0.0` / `release/1.0-stable` (commit `2551bb1`, v0.1.5) — the earlier marker, i.e. the version WITHOUT หมวด; same commit as `backup-pre-category-v0.1.5`.
+
+## Cloudflare Access notes (operational)
+- The only Access **Bypass** on `owner.*` is the exact path `/sw.js` (lets stuck devices fetch the self-destructing
+  worker). Never widen it to a prefix/wildcard; never add bypasses for `/join*` or `/api/public/*` on the owner host.
+- The member-join QR (owner console → สมาชิก) points at the **pos.\*** host, which is public.
+- Add a WAF rate-limiting rule for `POST /api/public/join/*` on the pos hosts (generous per-IP: customers share the shop Wi-Fi).

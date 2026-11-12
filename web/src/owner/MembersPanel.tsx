@@ -80,7 +80,10 @@ export function MembersPanel() {
   /** search responses may land out of order — only the newest is applied */
   const seq = useRef(0)
 
-  const joinUrl = shopId !== '' ? `${window.location.origin}/join/${encodeURIComponent(shopId)}` : ''
+  // Customers scan this QR on their own phones: it must point at the public POS host,
+  // never at the Access-protected owner.* host (owner.x -> pos.x; dev/localhost unchanged).
+  const joinOrigin = `${window.location.protocol}//${window.location.host.replace(/^owner./, 'pos.')}`
+  const joinUrl = shopId !== '' ? `${joinOrigin}/join/${encodeURIComponent(shopId)}` : ''
 
   const load = useCallback(
     async (query: string) => {
