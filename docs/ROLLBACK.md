@@ -25,4 +25,5 @@ Do NOT tag `2551bb1` / `v0.1.5` itself: its workflow installs the latest `worker
 this project, so that deploy would fail.
 
 ## Stable markers
-- `stable-v1.0.0` — the stable version (see git tag message)
+- `stable-v0.1.6` (commit `f59e0d7`, production v0.1.6) and branch `release/stable` — the current stable version.
+- `stable-v1.0.0` / `release/1.0-stable` (commit `2551bb1`, v0.1.5) — the earlier marker, i.e. the version WITHOUT หมวด; same commit as `backup-pre-category-v0.1.5`.
