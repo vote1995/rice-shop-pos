@@ -16,6 +16,8 @@ import {
 } from '../api'
 import type { DeviceCreds, DeviceStatus, PinResponse, RegisterResponse, Staff } from '../api'
 import Counter from './Counter'
+import TopBarMenu, { applyStatusBarStyle } from './TopBarMenu'
+import type { ThemeChoice } from './TopBarMenu'
 
 // 3.54: auto-lock after 5 minutes without any pointer/key/touch activity.
 const AUTOLOCK_MS = 5 * 60 * 1000
@@ -29,10 +31,8 @@ type Screen = 'register' | 'pending' | 'revoked' | 'staff' | 'pin' | 'home'
 
 // UI-4: the staff app carries its own theme (the `.pos` token scope in
 // styles.css), remembered in localStorage 'pos.theme' and following the OS
-// by default. The header button cycles สว่าง -> มืด -> ตามระบบ.
-type ThemeChoice = 'light' | 'dark' | 'system'
+// by default. The header menu item cycles สว่าง -> มืด -> ตามระบบ.
 const THEME_KEY = 'pos.theme'
-const THEME_LABEL: Record<ThemeChoice, string> = { light: 'สว่าง', dark: 'มืด', system: 'ตามระบบ' }
 
 function readTheme(): ThemeChoice {
   try {
@@ -77,48 +77,6 @@ function usePosTheme(): { choice: ThemeChoice; resolved: 'light' | 'dark'; cycle
     resolved: choice === 'system' ? (systemDark ? 'dark' : 'light') : choice,
     cycle,
   }
-}
-
-/** Sun / moon / monitor line icon of the theme choice (no icon library). */
-function ThemeIcon({ choice, resolved }: { choice: ThemeChoice; resolved: 'light' | 'dark' }) {
-  const glyph =
-    choice === 'system' ? (
-      <>
-        <rect x="3" y="4" width="18" height="13" rx="2" />
-        <path d="M8.5 21h7" />
-        <path d="M12 17v4" />
-      </>
-    ) : resolved === 'dark' ? (
-      <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" />
-    ) : (
-      <>
-        <circle cx="12" cy="12" r="4" />
-        <path d="M12 2.5v2" />
-        <path d="M12 19.5v2" />
-        <path d="M2.5 12h2" />
-        <path d="M19.5 12h2" />
-        <path d="M5.2 5.2l1.4 1.4" />
-        <path d="M17.4 17.4l1.4 1.4" />
-        <path d="M18.8 5.2l-1.4 1.4" />
-        <path d="M6.6 17.4l-1.4 1.4" />
-      </>
-    )
-  return (
-    <svg
-      width={20}
-      height={20}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.75}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      focusable="false"
-    >
-      {glyph}
-    </svg>
-  )
 }
 
 /** The rice-bowl glyph of the auth brand mark (decorative, no icon library). */
@@ -169,6 +127,13 @@ export default function PosApp() {
   const [tick, setTick] = useState(Date.now())
   const [busy, setBusy] = useState(false)
   const theme = usePosTheme()
+
+  // Native Android app only — keep the status-bar icon colour in step
+  // with the theme (light icons on the dark theme, dark icons on the light
+  // one) on initial load and on every toggle/system change. No-op in a browser.
+  useEffect(() => {
+    void applyStatusBarStyle(theme.resolved)
+  }, [theme.resolved])
 
   /** 3.56: device revoked — wipe everything stored on this device. */
   const handleRevoked = useCallback(async () => {
@@ -608,25 +573,24 @@ export default function PosApp() {
     return (
       <div className="screen pos pos-home" data-theme={theme.resolved}>
         <header className="bar">
-          <span className="brand">POS ร้านข้าว</span>
-          {shopName ? <span className="muted">ร้าน {shopName} · {me.name}</span> : <span className="muted">{me.name}</span>}
+          {/* title + shop/staff context on the left, sound toggle and
+              one kebab menu on the right — the theme switch, ล็อกจอ and
+              ออกจากระบบ moved into the menu (unchanged handlers). */}
+          <span className="pos-bar-id">
+            <span className="brand">POS ร้านข้าว</span>
+            <span className="pos-bar-context">
+              {shopName ? `ร้าน ${shopName} · ${me.name}` : me.name}
+            </span>
+          </span>
           <span className="bar-actions">
             <PayAnnouncer />
-            <button
-              type="button"
-              className="bar-btn pos-theme-btn"
-              aria-label="สลับธีม"
-              title={THEME_LABEL[theme.choice]}
-              onClick={theme.cycle}
-            >
-              <ThemeIcon choice={theme.choice} resolved={theme.resolved} />
-            </button>
-            <button className="bar-btn" onClick={() => void endSession(false)}>
-              ล็อกจอ
-            </button>
-            <button className="bar-btn" onClick={() => void endSession(true)}>
-              ออกจากระบบ
-            </button>
+            <TopBarMenu
+              themeChoice={theme.choice}
+              themeResolved={theme.resolved}
+              onCycleTheme={theme.cycle}
+              onLock={() => void endSession(false)}
+              onLogout={() => void endSession(true)}
+            />
           </span>
         </header>
         <main className="content pos-content">

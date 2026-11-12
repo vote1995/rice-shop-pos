@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, api, errorCode, friendlyError } from '../api'
+import { onRefreshRequest } from './dataRefresh'
 
 // ---------------------------------------------------------------------------
 // API shapes (GET /api/stock/count-sheet, POST /api/stock/count)
@@ -132,6 +133,12 @@ export default function StockCount({
     return () => window.clearInterval(t)
   }, [])
 
+  /** Latest rows without re-creating the loader (a silent refresh keeps them). */
+  const rowsRef = useRef<CountSheetRow[] | null>(null)
+  useEffect(() => {
+    rowsRef.current = rows
+  }, [rows])
+
   /** Loads the sheet. `silent` refreshes the rows without blanking the list. */
   const loadSheet = useCallback(async (silent: boolean) => {
     if (!silent) setLoading(true)
@@ -142,7 +149,9 @@ export default function StockCount({
     } catch (e) {
       if (errorCode(e) === 'session_invalid') return expiredRef.current()
       if (errorCode(e) === 'device_revoked') return revokedRef.current()
-      setLoadErr(friendlyError(e))
+      // a silent refresh keeps the stale rows (and the typed numbers) on
+      // screen; the error only matters when there is no sheet to show yet
+      if (rowsRef.current === null) setLoadErr(friendlyError(e))
     } finally {
       setLoading(false)
     }
@@ -151,6 +160,11 @@ export default function StockCount({
   useEffect(() => {
     void loadSheet(false)
   }, [loadSheet])
+
+  // The manual ⋮ "รีเฟรชข้อมูล" also refreshes these rows — NEVER the numbers
+  // already typed into the boxes (only `rows` reloads; `values` stays). No
+  // timed polling on this tab.
+  useEffect(() => onRefreshRequest(() => void loadSheet(true)), [loadSheet])
 
   /** One draft per filled box; `bad` marks text that is not a usable number. */
   const drafts = useMemo(() => {

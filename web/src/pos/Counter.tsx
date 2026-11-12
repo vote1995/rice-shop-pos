@@ -16,6 +16,12 @@ import type { Channel, GroupWithOptions } from './pricing'
 import StockCount from './StockCount'
 import BeamQr from './BeamQr'
 import { announcePaid } from './announce'
+import {
+  markRefreshFailed,
+  markRefreshOk,
+  onRefreshRequest,
+  setRefreshBusy,
+} from './dataRefresh'
 
 // ---------------------------------------------------------------------------
 // Constants / small helpers
@@ -49,6 +55,10 @@ const CANCEL_REASONS = ['ลูกค้าเปลี่ยนใจ', 'สั
 const BANKNOTES = [20, 50, 100, 500, 1000]
 
 const ORDERS_POLL_MS = 10_000
+/** Coming back to the app refetches the menu only after this much silence. */
+const MENU_STALE_MS = 60_000
+/** Menu refresh cadence while the counter stays visible (±10% jitter below). */
+const MENU_PERIOD_MS = 10 * 60_000
 /** One bill holds at most 50 lines (server bound). */
 const MAX_LINES = 50
 const DRAFTS_KEY = 'pos.drafts'
@@ -196,6 +206,10 @@ interface ToastState {
   label: string | null
   run: (() => void) | null
 }
+
+/** Outcome of one menu fetch: 'auth' = the session/revoked hand-off already
+ *  ran (the screen is switching away — never surfaced as a data error). */
+type MenuLoadResult = 'ok' | 'failed' | 'auth'
 
 // ---------------------------------------------------------------------------
 // Button styles. Only the generic bits live here (all colours are theme
@@ -411,24 +425,43 @@ export default function Counter({
 
   // ---- data loading ------------------------------------------------------
 
-  const loadMenu = useCallback(async () => {
-    setMenuLoading(true)
+  /** Latest menu without re-subscribing the loaders (drives silent refreshes). */
+  const menuRef = useRef<MenuData | null>(null)
+  useEffect(() => {
+    menuRef.current = menu
+  }, [menu])
+
+  /**
+   * Fetches the menu. `silent` (used once menu data already exists) never
+   * blanks the list or flashes the loading state, keeps the stale menu on
+   * failure and only sets the visible error when there is nothing to sell
+   * yet. Unchanged JSON keeps the OLD state object, so nothing re-renders
+   * (the server's ETag revalidation makes this the common case).
+   */
+  const loadMenu = useCallback(async (silent = false): Promise<MenuLoadResult> => {
+    if (!silent) setMenuLoading(true)
     try {
       const d = await api<MenuData>('GET', '/api/menu', undefined, 'both')
-      setMenu(d)
+      setMenu((prev) =>
+        prev !== null && JSON.stringify(prev) === JSON.stringify(d) ? prev : d,
+      )
       setMenuErr('')
+      return 'ok'
     } catch (e) {
-      if (errorCode(e) === 'session_invalid') return expiredRef.current()
-      if (errorCode(e) === 'device_revoked') return revokedRef.current()
-      setMenuErr(friendlyError(e))
+      if (errorCode(e) === 'session_invalid') {
+        expiredRef.current()
+        return 'auth'
+      }
+      if (errorCode(e) === 'device_revoked') {
+        revokedRef.current()
+        return 'auth'
+      }
+      if (!silent || menuRef.current === null) setMenuErr(friendlyError(e))
+      return 'failed'
     } finally {
-      setMenuLoading(false)
+      if (!silent) setMenuLoading(false)
     }
   }, [])
-
-  useEffect(() => {
-    void loadMenu()
-  }, [loadMenu])
 
   const loadOrders = useCallback(async () => {
     try {
@@ -459,9 +492,64 @@ export default function Counter({
     }
   }, [])
 
+  /** A menu refresh in flight: concurrent triggers share the same promise. */
+  const refreshPromiseRef = useRef<Promise<MenuLoadResult> | null>(null)
+  /** When the menu (+ meals) last refreshed OK; null = never succeeded yet. */
+  const lastMenuOkRef = useRef<number | null>(null)
+
+  /**
+   * The one menu+meals fetch every trigger goes through (mount, focus,
+   * online, timer, the manual ⋮ item): concurrent callers await the SAME
+   * in-flight promise, and the dataRefresh store tracks busy/ok/failed for
+   * the ⋮ "รีเฟรชข้อมูล" item. Never touches the cart, held bills, channel
+   * or any open sheet — only `menu` (and the meals counter) change.
+   */
+  const refreshMenu = useCallback(async (): Promise<MenuLoadResult> => {
+    if (refreshPromiseRef.current) return refreshPromiseRef.current
+    const silent = menuRef.current !== null
+    const p = (async (): Promise<MenuLoadResult> => {
+      setRefreshBusy(true)
+      try {
+        const [r] = await Promise.all([loadMenu(silent), loadStaffMeals()])
+        if (r === 'ok') {
+          lastMenuOkRef.current = Date.now()
+          markRefreshOk()
+        } else if (r === 'failed') {
+          markRefreshFailed()
+        }
+        return r
+      } finally {
+        refreshPromiseRef.current = null
+        setRefreshBusy(false)
+      }
+    })()
+    refreshPromiseRef.current = p
+    return p
+  }, [loadMenu, loadStaffMeals])
+
+  /** Manual refresh (the ⋮ item): menu + meals + the queue, with toasts. */
+  async function doRefresh(manual: boolean) {
+    if (!manual) {
+      void refreshMenu()
+      return
+    }
+    flash('กำลังอัปเดต…')
+    const [r] = await Promise.all([refreshMenu(), loadOrders()])
+    if (r !== 'auth') {
+      flash(r === 'ok' ? 'อัปเดตแล้ว' : 'อัปเดตไม่สำเร็จ ลองใหม่อีกครั้ง')
+    }
+  }
+
+  // keep the latest refresh handler without re-creating the listeners below
+  const doRefreshRef = useRef(doRefresh)
   useEffect(() => {
-    void loadStaffMeals()
-  }, [loadStaffMeals])
+    doRefreshRef.current = doRefresh
+  })
+
+  // first load: menu + today's staff-meal plates, one coalesced refresh
+  useEffect(() => {
+    void refreshMenu()
+  }, [refreshMenu])
 
   // 10 s polling while visible + on focus + after every action
   useEffect(() => {
@@ -480,6 +568,54 @@ export default function Counter({
       window.removeEventListener('focus', onFocus)
     }
   }, [loadOrders])
+
+  // Menu freshness without heavy polling (the 10 s orders poll stays as is;
+  // the server's ETag makes each menu revalidation cheap or a 304):
+  // (a) back on screen / window refocused AND the last OK refresh is >60 s old
+  //     (null = the last attempt failed, e.g. offline -> retry),
+  // (b) the network came back,
+  // (c) every 10 min while visible, ±10% jitter, self-rescheduling (a hidden
+  //     tab skips the fetch but keeps the cadence),
+  // (d) the manual ⋮ "รีเฟรชข้อมูล" item ('pos:refresh') — that one also
+  //     reloads the queue and toasts.
+  // Concurrent triggers coalesce inside refreshMenu().
+  useEffect(() => {
+    const wake = () => {
+      if (document.visibilityState !== 'visible') return
+      const last = lastMenuOkRef.current
+      if (last !== null && Date.now() - last < MENU_STALE_MS) return
+      doRefreshRef.current(false)
+    }
+    document.addEventListener('visibilitychange', wake)
+    window.addEventListener('focus', wake)
+    const onOnline = () => doRefreshRef.current(false)
+    window.addEventListener('online', onOnline)
+    const offRefreshEvent = onRefreshRequest(() => doRefreshRef.current(true))
+    return () => {
+      document.removeEventListener('visibilitychange', wake)
+      window.removeEventListener('focus', wake)
+      window.removeEventListener('online', onOnline)
+      offRefreshEvent()
+    }
+  }, [])
+
+  useEffect(() => {
+    let timer: number | null = null
+    function tick() {
+      timer = null
+      if (document.visibilityState === 'visible') doRefreshRef.current(false)
+      schedule()
+    }
+    function schedule() {
+      // ±10% jitter so a fleet of POS devices never syncs onto one second
+      const jitter = 1 + (Math.random() * 0.2 - 0.1)
+      timer = window.setTimeout(tick, Math.round(MENU_PERIOD_MS * jitter))
+    }
+    schedule()
+    return () => {
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [])
 
   // the picked channel and the cart/held bills survive a reload
   useEffect(() => {

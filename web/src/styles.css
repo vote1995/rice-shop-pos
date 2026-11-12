@@ -915,7 +915,7 @@ body:has(.pos[data-theme="dark"]) { background: #0f1012; }
 .pos .chip { background: var(--surface); border: 1px solid var(--border); color: var(--text); font-weight: 600; }
 .pos .chip-x { background: var(--danger-soft); color: var(--danger); border-left: none; }
 
-/* ---- staff header ---- */
+/* ---- staff header: title block left, sound toggle + kebab menu right ---- */
 .pos .bar {
   position: sticky; top: 0; z-index: 30; flex: none;
   padding: 8px 12px;
@@ -925,36 +925,78 @@ body:has(.pos[data-theme="dark"]) { background: #0f1012; }
   color: var(--text);
 }
 .pos .bar { gap: 8px; }
-.pos .bar .muted {
-  color: var(--muted); flex: 1 1 auto; min-width: 0;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
+/* the title block: app title over the shop/staff context; the context line is
+   the only part that ever ellipsizes, so the shop name keeps its room */
+.pos .pos-bar-id {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; flex-direction: column; gap: 1px;
+  line-height: 1.3;
 }
 .pos .bar .brand { flex: none; white-space: nowrap; }
-.pos .bar-actions { flex: none; }
-.pos .bar-actions { gap: 6px; }
+.pos .pos-bar-context {
+  color: var(--muted); font-size: 0.8rem; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pos .bar-actions { flex: none; gap: 6px; }
 .pos .bar-btn {
   min-height: 44px; padding: 4px 12px; font-size: 0.85rem; white-space: nowrap;
   background: transparent; border-color: var(--border); color: var(--text);
 }
-.pos .pos-theme-btn {
+.pos .pos-menu-btn {
   width: 44px; min-width: 44px; min-height: 44px; padding: 0;
   display: grid; place-items: center; color: var(--muted);
 }
 .pos .pos-announce-btn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
 .pos .pos-announce-btn.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+
+/* the kebab dropdown: anchored under the menu button, right-aligned so it
+   stays inside the viewport on a 360px phone */
+.pos .pos-topmenu { position: relative; display: flex; }
+.pos .pos-topmenu-panel {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 45;
+  min-width: 208px; max-width: calc(100vw - 16px);
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+}
+.pos .pos-topmenu-item {
+  width: 100%; min-height: 48px; padding: 8px 12px;
+  display: flex; align-items: center; gap: 10px;
+  border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: var(--text);
+  font-size: 0.95rem; font-weight: 600; text-align: left;
+}
+.pos .pos-topmenu-item:active { background: var(--surface-2); }
+.pos .pos-topmenu-item.danger { color: var(--danger); }
+.pos .pos-topmenu-item.danger:active { background: var(--danger-soft); }
+.pos .pos-topmenu-ic { flex: none; width: 24px; display: grid; place-items: center; color: var(--muted); }
+.pos .pos-topmenu-item.danger .pos-topmenu-ic { color: var(--danger); }
+.pos .pos-topmenu-sep { flex: none; height: 1px; margin: 2px 4px; background: var(--border); }
+/* รีเฟรชข้อมูล: a two-line item (label + "อัปเดตล่าสุด HH:mm") */
+.pos .pos-topmenu-text {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; flex-direction: column; gap: 1px;
+}
+.pos .pos-topmenu-sub { font-size: 0.75rem; font-weight: 600; line-height: 1.3; color: var(--muted); }
+.pos .pos-topmenu-sub.warn { color: var(--warning); }
+/* the refresh icon spins while a refresh is in flight (reuse the global
+   `spin` keyframes of .spinner) */
+.pos .pos-refresh-spin { animation: spin 0.9s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .pos .pos-refresh-spin { animation: none; } }
 @media (max-width: 520px) {
   .pos .bar { padding-left: 10px; padding-right: 10px; gap: 6px; }
   .pos .bar-actions { gap: 4px; }
   .pos .bar-btn { padding: 4px 8px; }
-  .pos .pos-theme-btn { width: 40px; min-width: 40px; padding: 0; }
+  .pos .pos-menu-btn { width: 40px; min-width: 40px; padding: 0; }
   .pos .pos-announce-btn { width: 40px; min-width: 40px; padding: 0; justify-content: center; }
   .pos .pos-announce-label { display: none; }
 }
 @media (max-width: 380px) {
-  .pos .bar .muted { display: none; }
-  .pos .bar .brand { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 0.95rem; }
   .pos .bar-btn { padding: 4px 6px; font-size: 0.8rem; }
-  .pos .pos-theme-btn, .pos .pos-announce-btn { width: 38px; min-width: 38px; padding: 0; }
+  .pos .pos-menu-btn, .pos .pos-announce-btn { width: 38px; min-width: 38px; padding: 0; }
 }
 
 /* ---- selling screen frame: one column on a phone, builder + order on wide ---- */

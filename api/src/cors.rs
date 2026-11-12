@@ -27,7 +27,9 @@ use axum::http::{header, HeaderMap, HeaderValue, Method, Response, StatusCode};
 pub const ENV_VAR: &str = "CORS_ALLOWED_ORIGINS";
 
 /// Everything the staff POS sends. Auth is header-based, so no cookie header.
-const ALLOW_HEADERS: &str = "Content-Type, Authorization, X-Device-Token";
+/// `If-None-Match` is not CORS-safelisted, yet the POS revalidates `/api/menu`
+/// and `/api/media/*` with it (api/src/routes/menu.rs, api/src/routes/media.rs).
+const ALLOW_HEADERS: &str = "Content-Type, Authorization, X-Device-Token, If-None-Match";
 /// Every method the in-scope API uses.
 const ALLOW_METHODS: &str = "GET, POST, PUT, DELETE, OPTIONS";
 /// One day: the WebView outlives that easily, so preflights are not re-sent.
@@ -357,8 +359,25 @@ mod tests {
         );
         assert_eq!(
             h.get(header::ACCESS_CONTROL_ALLOW_HEADERS).unwrap(),
-            "Content-Type, Authorization, X-Device-Token"
+            "Content-Type, Authorization, X-Device-Token, If-None-Match"
         );
+        // `If-None-Match` is the one non-safelisted request header the POS
+        // sends, so a preflight without it in the list would be rejected by
+        // the browser and every revalidation would break.
+        for required in [
+            "Content-Type",
+            "Authorization",
+            "X-Device-Token",
+            "If-None-Match",
+        ] {
+            assert!(h
+                .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .split(',')
+                .any(|h| h.trim() == required));
+        }
         assert_eq!(h.get(header::ACCESS_CONTROL_MAX_AGE).unwrap(), "86400");
         assert_eq!(h.get(header::VARY).unwrap(), "Origin");
         // Credential-less by design; never a wildcard.
