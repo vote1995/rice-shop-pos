@@ -2262,6 +2262,12 @@ function OrderBreakdown({
           <span>−{baht(order.discount_amount)}</span>
         </div>
       ) : null}
+      {order.points_redeemed > 0 ? (
+        <div className="pay-sum-row">
+          <span>ส่วนลดแต้ม ({order.points_redeemed} แต้ม)</span>
+          <span>−{baht(order.points_redeemed * 100)}</span>
+        </div>
+      ) : null}
       <div className="pay-sum-row pay-sum-total">
         <span>ยอดรวม</span>
         <span>{baht(order.total_amount)}</span>
