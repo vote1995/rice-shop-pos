@@ -1,4 +1,18 @@
-// Typed fetch wrapper for the Rust Worker API (same-origin, served under /api).
+// Typed fetch wrapper for the Rust Worker API (served under /api).
+
+/**
+ * Origin every /api/... request is prefixed with. "" (VITE_API_BASE unset) is
+ * the normal web build: same-origin relative URLs, byte-identical to before.
+ * The Capacitor Android build (.env.android -> `vite build --mode android`)
+ * serves the SPA from https://localhost, so it must call the API on its real
+ * absolute origin and rely on the server's CORS headers instead.
+ */
+export const API_BASE = import.meta.env.VITE_API_BASE ?? ''
+
+/** Full URL of an /api/... path (same-origin relative when API_BASE is ""). */
+export function apiUrl(path: string): string {
+  return `${API_BASE}${path}`
+}
 
 export interface DeviceCreds {
   device_id: string
@@ -45,7 +59,7 @@ export async function api<T = unknown>(
   }
   let res: Response
   try {
-    res = await fetch(path, {
+    res = await fetch(apiUrl(path), {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -78,7 +92,7 @@ export async function api<T = unknown>(
 async function apiBinary<T>(method: string, path: string, blob: Blob, contentType: string): Promise<T> {
   let res: Response
   try {
-    res = await fetch(path, {
+    res = await fetch(apiUrl(path), {
       method,
       headers: { 'Content-Type': contentType },
       credentials: 'same-origin',
@@ -107,7 +121,9 @@ async function apiBinary<T>(method: string, path: string, blob: Blob, contentTyp
 
 /** Public, forever-cached URL of a stored image (MenuItem.image_key). */
 export function mediaUrl(key: string): string {
-  return `/api/media/${key}` // server-made key: menu/{uuid}/{uuid}.{ext}, URL-safe
+  // apiUrl(): the Capacitor build loads these <img> from the absolute API
+  // origin (the web build keeps the same-origin relative URL).
+  return apiUrl(`/api/media/${key}`) // server-made key: menu/{uuid}/{uuid}.{ext}, URL-safe
 }
 
 /** PUT /api/owner/menu-items/{id}/image — body is the raw WebP/JPEG bytes. */
@@ -170,7 +186,7 @@ export async function deleteSlip(id: string): Promise<void> {
 export async function slipPageUrl(id: string, page: number): Promise<string> {
   let res: Response
   try {
-    res = await fetch(`/api/owner/slips/${encodeURIComponent(id)}/pages/${page}`)
+    res = await fetch(apiUrl(`/api/owner/slips/${encodeURIComponent(id)}/pages/${page}`))
   } catch {
     throw new ApiError(0, 'network', 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้')
   }

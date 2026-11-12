@@ -42,6 +42,10 @@ binding = "AI"
 [vars]
 ACCESS_TEAM_DOMAIN = "vbo.cloudflareaccess.com"
 ACCESS_AUD = "85f5affb5b3c7bb44173c89f678199e7f5c24b935a34fd91b18d085172b69932"
+# CORS_ALLOWED_ORIGINS is deliberately NOT set in production: nothing may call
+# the API cross-origin today. When the Capacitor Android APK ships, set it here
+# explicitly (e.g. CORS_ALLOWED_ORIGINS = "https://localhost") or the WebView
+# will be blocked; until then CORS stays fully disabled (see api/src/cors.rs).
 
 # Slip queue sweep: return expired local-reader leases to the queue and pick
 # queued slips up for the cloud reader (api/src/slips/, phase 1).
@@ -99,6 +103,10 @@ ACCESS_AUD = "25b2242cbaa1a03c4902b6d6b333952b512fa649631a964a75b2a1b3fbf98ef5"
 # Fake Beam (api/src/beam.rs): dev has no Beam account. Never set this in
 # production — the code refuses to run if a real BEAM_API_KEY is also present.
 BEAM_MOCK = "1"
+# CORS for the Capacitor Android staff POS (dev APK): the WebView's origin is
+# https://localhost. Comma-separated EXACT origins; /api/owner/* (Access
+# cookies) and /api/beam/webhook are never CORS-enabled (api/src/cors.rs).
+CORS_ALLOWED_ORIGINS = "https://localhost"
 
 [env.dev.triggers]
 crons = []

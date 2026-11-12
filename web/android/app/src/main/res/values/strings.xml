@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">POS ร้านข้าว</string>
+    <string name="title_activity_main">POS ร้านข้าว</string>
+    <string name="package_name">win.twostackmaxgame.pos</string>
+    <string name="custom_url_scheme">win.twostackmaxgame.pos</string>
+</resources>

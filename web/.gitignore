@@ -2,3 +2,11 @@ node_modules
 dist
 dev-dist
 *.local
+
+# Capacitor: gradle build outputs & the machine-local Android SDK path
+# (everything else under android/ — including the cap-synced assets/public —
+# is committed).
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties

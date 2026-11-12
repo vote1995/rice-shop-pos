@@ -3,3 +3,8 @@ PIN_PEPPER=change-me-dev-only
 # Local dev only: empty AUD + DEV_OWNER_EMAIL = owner auth bypass (overrides wrangler.toml [vars]).
 ACCESS_AUD=
 ACCESS_TEAM_DOMAIN=
+# Optional (api/src/cors.rs): comma-separated exact origins allowed to call the
+# staff API cross-origin, e.g. the Capacitor Android WebView origin. Unset or
+# empty = CORS fully disabled. Only /api/* minus /api/owner/* and
+# /api/beam/webhook are ever CORS-enabled.
+# CORS_ALLOWED_ORIGINS=https://localhost

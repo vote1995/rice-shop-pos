@@ -7,6 +7,7 @@
 //! - [`error`]  — the JSON error type used by every handler
 //! - [`media`]  — R2 menu images + app-enforced free-tier quotas
 //! - [`pricing`] — the pure order-line pricing engine (no D1, no worker types)
+//! - [`cors`]   — opt-in allowlist CORS for the Capacitor Android staff POS
 
 use axum::{
     routing::{get, post, put},
@@ -17,6 +18,7 @@ use worker::*;
 
 mod auth;
 mod beam;
+mod cors;
 mod db;
 mod error;
 mod extract;
@@ -196,7 +198,38 @@ async fn fetch(
     env: Env,
     _ctx: Context,
 ) -> Result<axum::http::Response<axum::body::Body>> {
-    Ok(router(env).call(req).await?)
+    // Opt-in CORS (api/src/cors.rs) wraps the router. With the allowlist empty
+    // — or the request out of scope (no Origin, unlisted origin, /api/owner/*,
+    // /api/beam/webhook) — `decide` says Passthrough and the request flows to
+    // the router exactly as before, headers and OPTIONS handling included.
+    let allowlist =
+        cors::parse_allowlist(env.var(cors::ENV_VAR).ok().map(|v| v.to_string()).as_deref());
+    use axum::http::header::{ACCESS_CONTROL_REQUEST_METHOD, ORIGIN};
+    let origin = req
+        .headers()
+        .get(ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let decision = cors::decide(
+        origin.as_deref(),
+        req.method(),
+        req.headers().contains_key(ACCESS_CONTROL_REQUEST_METHOD),
+        req.uri().path(),
+        &allowlist,
+    );
+    match decision {
+        cors::Decision::Passthrough => Ok(router(env).call(req).await?),
+        cors::Decision::Preflight => {
+            Ok(cors::preflight_response(origin.as_deref().unwrap_or_default()))
+        }
+        cors::Decision::Allow => {
+            let mut res = router(env).call(req).await?;
+            if let Some(origin) = origin.as_deref() {
+                cors::add_response_headers(res.headers_mut(), origin);
+            }
+            Ok(res)
+        }
+    }
 }
 
 /// Cron (wrangler.toml `[triggers]`, every minute): slip queue sweep —
