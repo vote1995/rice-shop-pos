@@ -43,7 +43,7 @@ jobs:
           workspaces: api
           cache-bin: true
       - name: install worker-build
-        run: command -v worker-build || cargo install worker-build --version =0.8.7 --locked
+        run: worker-build --version 2>/dev/null | grep -q '0.8.7' || cargo install worker-build --version =0.8.7 --locked --force
       - uses: actions/setup-node@v4
         with:
           node-version: 22
