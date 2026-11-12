@@ -1,5 +1,8 @@
 /// <reference types="vite/client" />
 
+/** UTC build stamp injected by vite.config.ts (define). */
+declare const __APP_BUILD__: string
+
 interface ImportMetaEnv {
   /**
    * Absolute API origin for the Capacitor Android build (.env.android, e.g.

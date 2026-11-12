@@ -10,6 +10,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { SystemBars, SystemBarsStyle } from '@capacitor/core'
 import { requestRefresh, useRefreshStatus } from './dataRefresh'
+import { clearCacheAndReload } from '../swUpdate'
+import { API_BASE } from '../api'
+
+/** The offline PWA in a browser (not the bundled Android app): the only place a stale cache can exist. */
+function isWebPwa(): boolean {
+  const cap = (window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor
+  return API_BASE === '' && cap?.isNativePlatform?.() !== true
+}
 
 export type ThemeChoice = 'light' | 'dark' | 'system'
 
@@ -287,6 +295,22 @@ export default function TopBarMenu({
             </span>
             ล็อกจอ
           </button>
+          {isWebPwa() ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="pos-topmenu-item"
+              onClick={() => select(() => void clearCacheAndReload())}
+            >
+              <span className="pos-topmenu-ic" aria-hidden="true">
+                <RefreshIcon spin={false} />
+              </span>
+              <span>
+                ล้างแคชและโหลดแอปใหม่
+                <span className="pos-topmenu-sub" style={{ display: "block" }}>เวอร์ชัน {__APP_BUILD__} UTC</span>
+              </span>
+            </button>
+          ) : null}
           <span className="pos-topmenu-sep" aria-hidden="true" />
           <button
             type="button"

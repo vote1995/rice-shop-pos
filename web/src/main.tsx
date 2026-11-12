@@ -5,6 +5,7 @@ import { API_BASE } from './api'
 import PosApp from './pos/PosApp'
 import OwnerApp from './owner/OwnerApp'
 import JoinPage from './join/JoinPage'
+import { registerServiceWorker } from './swUpdate'
 
 // The Capacitor Android build (staff POS only). The app is bundled and served
 // from https://localhost, so the API lives on another origin (API_BASE from
@@ -49,9 +50,7 @@ if ('serviceWorker' in navigator && !isNativeApp) {
       })
     }
   } else if (!isJoinPage) {
-    window.addEventListener('load', () => {
-      void navigator.serviceWorker.register('/sw.js')
-    })
+    window.addEventListener('load', registerServiceWorker)
   }
 }
 
