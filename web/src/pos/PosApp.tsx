@@ -575,7 +575,7 @@ export default function PosApp() {
           </span>
         </header>
         <main className="content pos-content">
-          <Counter onSessionExpired={sessionExpired} onRevoked={handleRevoked} />
+          <Counter shopName={shopName} onSessionExpired={sessionExpired} onRevoked={handleRevoked} />
           {msg ? (
             <p className="error" role="alert">
               {msg}

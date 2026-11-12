@@ -676,7 +676,7 @@ export interface ReportBillRow {
   created_at: number
   channel: OrderChannel
   /** + 'staff' / 'staff_cancelled' for staff meals (สวัสดิการ, never a sale). */
-  status: OrderStatus | 'staff' | 'staff_cancelled'
+  status: OrderStatus | 'staff' | 'staff_cancelled' | 'test' | 'test_cancelled'
   net: number
   lines: string | null
 }

@@ -408,13 +408,15 @@ function billStatusLabel(status: string): string {
   if (status === 'cancelled') return 'ยกเลิก'
   if (status === 'staff') return 'สวัสดิการ'
   if (status === 'staff_cancelled') return 'ยกเลิก (สวัสดิการ)'
+  if (status === 'test') return 'ร้านทดสอบ (ไม่นับยอด)'
+  if (status === 'test_cancelled') return 'ยกเลิก (ร้านทดสอบ)'
   return 'ยังไม่ปิด'
 }
 
 /** success / warning / danger — the dot AND the text use this tone. */
 function billStatusTone(status: string): 'ok' | 'warn' | 'bad' {
   if (status === 'paid' || status === 'staff') return 'ok'
-  if (status === 'cancelled' || status === 'staff_cancelled') return 'bad'
+  if (status === 'cancelled' || status === 'staff_cancelled' || status === 'test_cancelled') return 'bad'
   return 'warn'
 }
 

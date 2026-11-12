@@ -363,9 +363,12 @@ function LongPressButton({
 // ---------------------------------------------------------------------------
 
 export default function Counter({
+  shopName,
   onSessionExpired,
   onRevoked,
 }: {
+  /** A shop whose name contains "test" never counts toward sales totals. */
+  shopName: string
   onSessionExpired: () => void
   onRevoked: () => void
 }) {
@@ -1718,7 +1721,9 @@ export default function Counter({
     return (
       <div style={{ ...S.body, gap: 10 }}>
         <div style={{ fontSize: 14, color: MUTED }}>
-          วันนี้: จ่ายแล้ว {paidToday.length} บิล · {baht(dayTotal)}
+          {/test/i.test(shopName)
+            ? 'ร้านทดสอบ — ไม่นับยอดขาย'
+            : `วันนี้: จ่ายแล้ว ${paidToday.length} บิล · ${baht(dayTotal)}`}
         </div>
         {ordersErr ? (
           <p className="error" role="alert">

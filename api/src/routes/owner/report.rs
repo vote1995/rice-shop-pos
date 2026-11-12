@@ -42,12 +42,18 @@ const MAX_BILLS: i64 = 200;
 /// The filtered bills. Binds: ?1 shop, ?2 from ms, ?3 to ms (exclusive),
 /// ?4/?5 time-of-day window ms, ?6 menu item | NULL, ?7 option | NULL,
 /// ?8 ingredient | NULL. `tod` = ms since Bangkok midnight. Staff meals (migration
-/// 0007) get status `staff` (`staff_cancelled`): never a sale, so every
+/// 0007) get status `staff` (`staff_cancelled`), and every bill of a TEST shop (a
+/// shop whose name contains "test", any case) gets `test` (`test_cancelled`):
+/// never a sale either, so the bills still list but add nothing to any
+/// money/plates/payment figure. Every
 /// `status = 'paid'` figure below leaves them out by itself.
 const MATCHED: &str = "WITH m AS (
   SELECT o.id, o.created_at, o.total_amount, o.channel, o.queue_number,
          o.discount_amount, o.created_by,
-         CASE WHEN o.staff_meal = 1 THEN CASE o.status WHEN 'cancelled' THEN 'staff_cancelled'
+         CASE WHEN EXISTS (SELECT 1 FROM shops sh
+                           WHERE sh.id = o.shop_id AND lower(sh.name) LIKE '%test%')
+                   THEN CASE o.status WHEN 'cancelled' THEN 'test_cancelled' ELSE 'test' END
+              WHEN o.staff_meal = 1 THEN CASE o.status WHEN 'cancelled' THEN 'staff_cancelled'
                                                       ELSE 'staff' END
               ELSE o.status END AS status,
          o.total_amount - COALESCE((SELECT SUM(p.refund_amount) FROM payments p
