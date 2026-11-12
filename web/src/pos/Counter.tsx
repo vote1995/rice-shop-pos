@@ -102,6 +102,13 @@ function isQuickType(menu: MenuData, item: MenuItem): boolean {
   return gs.length === 1 && gs[0].group.max_select === 1
 }
 
+/** The หมวด (type) a menu sits under on the sell screen: the owner's category, or —
+ *  when none was chosen — the menu's own name. */
+function catOf(it: MenuItem): string {
+  const c = it.category.trim()
+  return c === '' ? it.name.trim() : c
+}
+
 function samePicks(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false
   return a.every((x) => b.includes(x))
@@ -711,6 +718,13 @@ export default function Counter({
     [menu, type],
   )
 
+  /** หมวด tabs (top row) and the menu tabs of the selected หมวด (second row). */
+  const categories = useMemo(() => Array.from(new Set(items.map(catOf))), [items])
+  const activeCat = type ? catOf(type) : ''
+  const itemsInCat = useMemo(() => items.filter((i) => catOf(i) === activeCat), [items, activeCat])
+  // a หมวด that is just one menu with the same name needs no second row
+  const showMenuRow = !(itemsInCat.length === 1 && itemsInCat[0].name.trim() === activeCat)
+
   const quick = !!type && !!menu && isQuickType(menu, type)
   const quickTypeOf = useMemo(() => {
     const m: Record<string, string> = {}
@@ -892,6 +906,12 @@ export default function Counter({
     setChannel(c)
     setDrafts((prev) => ({ ...prev, current: { ...prev.current, channel: c } }))
     setMsg('')
+  }
+
+  function tapCategory(cat: string) {
+    const inCat = items.filter((i) => catOf(i) === cat)
+    const pick = inCat.find((i) => !i.sold_out && !i.stock_out) ?? inCat[0]
+    if (pick) tapType(pick)
   }
 
   function tapType(item: MenuItem) {
@@ -1611,8 +1631,23 @@ export default function Counter({
           </>
         )}
 
+        {categories.length > 0 ? (
+          <div className="pos-types pos-cats" aria-label="หมวดเมนู">
+            {categories.map((c) => (
+              <button
+                type="button"
+                key={c}
+                className={`pos-type${activeCat === c ? ' on' : ''}`}
+                onClick={() => tapCategory(c)}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {showMenuRow ? (
         <div className="pos-types" aria-label="ประเภทเมนู">
-          {items.map((it) => (
+          {itemsInCat.map((it) => (
             <LongPressButton
               key={it.id}
               className={`pos-type${type?.id === it.id ? ' on' : ''}${it.sold_out || it.stock_out ? ' soldout' : ''}`}
@@ -1628,6 +1663,7 @@ export default function Counter({
             </LongPressButton>
           ))}
         </div>
+        ) : null}
         {items.length === 0 ? (
           <p className="muted center-text">ยังไม่มีเมนู — รอเจ้าของร้านเพิ่มเมนูก่อน</p>
         ) : null}

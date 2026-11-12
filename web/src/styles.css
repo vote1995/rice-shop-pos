@@ -1029,7 +1029,8 @@ body:has(.pos[data-theme="dark"]) { background: #0f1012; }
 .pos .pos-types {
   display: flex; gap: 2px; align-items: stretch;
   margin: 0 -16px; padding: 0 16px;
-  overflow-x: auto; overscroll-behavior-x: contain;
+  overflow-x: auto; overflow-y: hidden; overscroll-behavior: contain;
+  touch-action: pan-x; /* horizontal drag only: no vertical wobble */
   -webkit-overflow-scrolling: touch; scrollbar-width: none;
   border-bottom: 1px solid var(--border);
 }
@@ -1739,3 +1740,19 @@ body:has(.join) { background: #f6f6f7; }
   background: var(--success-soft); color: var(--success);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+
+/* ---- sell screen: หมวด row above the menu tabs; bigger orange names ---- */
+.pos .pos-cats { margin-bottom: 0; }
+.pos .pos-cats .pos-type { color: var(--accent); font-size: 22px; opacity: 0.7; }
+.pos .pos-cats .pos-type.on { color: var(--accent); opacity: 1; border-bottom-color: var(--accent); }
+.pos .pos-group-title { font-size: 1.05rem; font-weight: 800; color: var(--accent); }
+.pos .pos-choice:not(.on) .pos-choice-name { color: var(--accent); }
+.pos .pos-choice-name { font-size: 1.2rem; font-weight: 800; line-height: 1.25; }
+
+/* ---- owner menu editor: bigger orange labels ---- */
+.menu-editor label { color: var(--accent); font-size: 1.05rem; font-weight: 800; }
+.menu-editor label input, .menu-editor label select { font-weight: 400; }
+.menu-editor h2 { color: var(--accent); font-size: 1.3rem; }
+.menu-editor h3, .menu-editor h3.muted { color: var(--accent); font-size: 1.15rem; }
+.menu-editor .item > button strong { color: var(--accent); font-size: 1.25rem; }
+.menu-editor .col-head, .menu-editor .muted.col-head { color: var(--accent); font-size: 1rem; font-weight: 800; }

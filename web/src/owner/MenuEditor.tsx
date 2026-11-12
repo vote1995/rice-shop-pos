@@ -576,7 +576,7 @@ export default function MenuEditor() {
     const it = editItem
     const lists = listsOf(it.id)
     return (
-      <section>
+      <section className="menu-editor">
         <div className="row">
           <button className="btn ghost" style={{ flex: 'none', minWidth: 44 }} onClick={() => setEditId(null)}>
             ← กลับ
@@ -685,10 +685,10 @@ export default function MenuEditor() {
                 </button>
               </div>
               <div className="row" style={{ gap: 10, padding: '0 2px' }}>
-                <span className="muted" style={{ flex: '1 1 140px', minWidth: 0, fontSize: '0.75rem' }}>
+                <span className="muted col-head" style={{ flex: '1 1 140px', minWidth: 0 }}>
                   ตัวเลือก
                 </span>
-                <span className="muted" style={{ flex: '0 0 84px', fontSize: '0.75rem' }}>
+                <span className="muted col-head" style={{ flex: '0 0 84px' }}>
                   +ราคา ฿
                 </span>
                 <span style={{ flex: '0 0 44px' }} />
@@ -787,7 +787,7 @@ export default function MenuEditor() {
   // ================= TYPE LIST =================
 
   return (
-    <section>
+    <section className="menu-editor">
       {msg ? (
         <p className="error" role="alert">
           {msg}
