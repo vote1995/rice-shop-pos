@@ -9,6 +9,17 @@ if (keystorePropsFile.exists()) {
     keystorePropsFile.withInputStream { keystoreProps.load(it) }
 }
 
+// A release build must never fall back to an unsigned APK: fail loudly instead.
+gradle.taskGraph.whenReady { graph ->
+    def wantsRelease = graph.allTasks.any { it.name in ['assembleRelease', 'bundleRelease', 'packageRelease'] }
+    if (wantsRelease) {
+        def sf = keystoreProps['storeFile']
+        if (!sf || !new File(sf).isAbsolute() || !new File(sf).exists()) {
+            throw new GradleException("Release signing is not configured: put an ABSOLUTE storeFile (plus storePassword, keyAlias, keyPassword) in ${keystorePropsFile} or set RICE_POS_KEYSTORE_PROPS")
+        }
+    }
+}
+
 android {
     namespace = "win.twostackmaxgame.pos"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -16,8 +27,8 @@ android {
         applicationId "win.twostackmaxgame.pos"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 2
-        versionName "0.1.4"
+        versionCode 3
+        versionName "0.1.5"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
