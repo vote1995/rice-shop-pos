@@ -12,7 +12,7 @@ Every cron tick (prod only — dev has no cron) `src/monitor.rs`:
 |-------|-----------|
 | `d1` | `SELECT 1` through D1 errors |
 | `r2` | the MEDIA bucket binding errors on a HEAD (a missing object is fine) |
-| `stuck_beam` | one or more `payments` are `pending` with a Beam charge older than 15 min — Beam may have taken the money without confirming (or the QR was abandoned and never marked expired) |
+| `stuck_beam` | a `pending` Beam charge older than 15 min whose bill is STILL OPEN (preparing/served) — the customer may have paid and the webhook was lost. Cancelled/paid bills are ignored: their QR payment row stays `pending` forever (see "expired" below) |
 
 and it writes a `cron_heartbeat` row. State lives in `monitor_state` (migration 0014).
 

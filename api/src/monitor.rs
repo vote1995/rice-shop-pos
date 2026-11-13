@@ -96,8 +96,9 @@ const R2_PROBE_KEY: &str = "app/manifest.json";
 /// The stuck-payment query, kept as a constant so a test can pin its guards
 /// (same pattern as `PAID_COUNTER_MEMBER` in loyalty.rs): strictly older than
 /// the cutoff (`created_at < ?1`), pending, and a Beam charge.
-const STUCK_SQL: &str = "SELECT COUNT(*) AS n FROM payments
-     WHERE status = 'pending' AND beam_charge_id IS NOT NULL AND created_at < ?1";
+const STUCK_SQL: &str = "SELECT COUNT(*) AS n FROM payments p JOIN orders o ON o.id = p.order_id
+     WHERE p.status = 'pending' AND p.beam_charge_id IS NOT NULL AND p.created_at < ?1
+       AND o.status IN ('preparing', 'served')";
 
 // ---------------------------------------------------------------------------
 // Pure rules (unit-tested on the host, no D1 / worker types)
@@ -627,6 +628,8 @@ mod tests {
             "status = 'pending'",
             "beam_charge_id IS NOT NULL",
             "created_at < ?1",
+            "o.status IN ('preparing', 'served')",
+            "o.status IN ('preparing', 'served')",
         ] {
             assert!(STUCK_SQL.contains(needle), "lost guard {needle}");
         }
