@@ -148,9 +148,10 @@ struct OrderRow {
     /// balance arrive as the two scalar subqueries of [`ORDER_COLUMNS`].
     customer_id: Option<String>,
     points_redeemed: i64,
-    points_earned: i64,
+    /// A multiple of 0.5 (earnings are half points, migration 0011 columns).
+    points_earned: f64,
     member_name: Option<String>,
-    member_points: Option<i64>,
+    member_points: Option<f64>,
 }
 
 /// One order_items row of the day window.
@@ -701,7 +702,7 @@ mod tests {
             staff_meal: 0,
             customer_id: None,
             points_redeemed: 0,
-            points_earned: 0,
+            points_earned: 0.0,
             member_name: None,
             member_points: None,
         }

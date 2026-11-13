@@ -20,6 +20,7 @@ import type {
 } from '../api'
 import { applicableGroups, bahtToSatang, fmtBaht, priceLine, validateLine } from './pricing'
 import type { Channel, GroupWithOptions } from './pricing'
+import { POINT_STEP, fmtPoints, maxRedeemable, pointsEarned } from './points'
 import StockCount from './StockCount'
 import BeamQr from './BeamQr'
 import { announcePaid } from './announce'
@@ -2319,17 +2320,7 @@ function OrderBreakdown({
 // sheet continues with the UPDATED order), or skip straight to the payment.
 // ---------------------------------------------------------------------------
 
-/** 1 point = ฿1 = 100 satang; redemptions move in whole 10s only. */
-const POINT_STEP = 10
-
-/**
- * The loyalty cap on one bill: the largest multiple of 10 that is <= the
- * member's available points AND <= the subtotal in whole baht (the subtotal is
- * the bill BEFORE points, i.e. total_amount + points_redeemed*100).
- */
-function maxRedeemable(availablePoints: number, subtotalSatang: number): number {
-  return Math.floor(Math.min(availablePoints, Math.floor(subtotalSatang / 100)) / POINT_STEP) * POINT_STEP
-}
+// POINT_STEP / maxRedeemable / fmtPoints live in ./points (fractional points).
 
 function PaySheet({
   order,
@@ -2517,11 +2508,11 @@ function PaySheet({
             {result.order.customer_id ? (
               <span style={{ fontSize: 14, fontWeight: 700, color: GREEN }}>
                 {result.order.points_redeemed > 0
-                  ? `ใช้ ${result.order.points_redeemed} แต้ม · `
+                  ? `ใช้ ${fmtPoints(result.order.points_redeemed)} แต้ม · `
                   : ''}
-                ได้รับ +{result.order.points_earned} แต้ม
+                ได้รับ +{fmtPoints(result.order.points_earned)} แต้ม
                 {result.order.member_points !== null
-                  ? ` · คงเหลือ ${result.order.member_points} แต้ม`
+                  ? ` · คงเหลือ ${fmtPoints(result.order.member_points)} แต้ม`
                   : ''}
               </span>
             ) : null}
@@ -2608,12 +2599,17 @@ function PaySheet({
                 <div className="pay-sum-row">
                   <span>แต้มคงเหลือ</span>
                   <span>
-                    {member.points} แต้ม
+                    {fmtPoints(member.points)} แต้ม
                     {member.available_points < member.points
-                      ? ` (ใช้ได้ ${member.available_points})`
+                      ? ` (ใช้ได้ ${fmtPoints(member.available_points)})`
                       : ''}
                   </span>
                 </div>
+                {/* earn preview: the server stays authoritative — same rule,
+                    0.5 point per full 50฿ of what this bill will cost */}
+                <p className="muted small" style={{ margin: 0 }}>
+                  บิลนี้สะสมประมาณ {fmtPoints(pointsEarned(afterPoints))} แต้ม (50 บาท = 0.5 แต้ม)
+                </p>
                 {member.available_points >= POINT_STEP ? (
                   <>
                     <div className="pay-member-stepper">

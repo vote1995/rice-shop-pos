@@ -1,6 +1,8 @@
 //! Member loyalty points — the core (docs/members-spec.md, migration 0011).
 //!
-//! Money is satang everywhere; 1 point = 1 baht = 100 satang. This module is
+//! Money is satang everywhere; 1 point = 1 baht = 100 satang when REDEEMED,
+//! while EARNING is 0.5 point per whole 50.00 ฿ of a bill (so a balance is a
+//! multiple of 0.5, not a whole number — see [`earn_points`]). This module is
 //! the shared core of the members feature, split the same way the rest of the
 //! crate is:
 //!
@@ -109,32 +111,37 @@ pub fn clean_name(raw: &str) -> Option<String> {
     (1..=MAX_NAME_CHARS).contains(&len).then_some(name)
 }
 
-/// Points earned by one bill: `floor(total_satang / 10_000)` — 1 point per
-/// whole 100.00 ฿ of the bill total AFTER the redeemed points were deducted,
-/// per bill, never fractional, never negative.
-pub fn earn_points(total_satang: i64) -> i64 {
-    total_satang.max(0) / 10_000
+/// Points earned by one bill: `floor(total_satang / 5_000) * 0.5` — half a
+/// point per whole 50.00 ฿ of the bill total AFTER the redeemed points were
+/// deducted, per bill (49.99 ฿ -> 0, 50.00 ฿ -> 0.5, 100.00 ฿ -> 1.0,
+/// 150.00 ฿ -> 1.5), never negative. A balance is therefore always a
+/// multiple of 0.5 and is held as an `f64` everywhere it is read back.
+pub fn earn_points(total_satang: i64) -> f64 {
+    (total_satang.max(0) / 5_000) as f64 * 0.5
 }
 
 /// The largest redemption allowed on a bill whose subtotal (satang, BEFORE
 /// points are deducted) is `subtotal_satang`: whole steps of 10 points
 /// (10 points = 10.00 ฿ discount), never more than the member's available
 /// points and never more than the whole 10-฿ steps the subtotal covers.
+/// `available_points` may be fractional (a multiple of 0.5): only whole
+/// steps of it count, so 19.5 points still cap a bill at one step of 10.
 /// 0 when no step of 10 fits — a member needs at least 10 points AND a
 /// 10.00 ฿ bill to redeem anything.
-pub fn max_redeemable(subtotal_satang: i64, available_points: i64) -> i64 {
-    if subtotal_satang <= 0 || available_points < 10 {
+pub fn max_redeemable(subtotal_satang: i64, available_points: f64) -> i64 {
+    if subtotal_satang <= 0 || available_points < 10.0 {
         return 0;
     }
     let by_subtotal = subtotal_satang / 100 / 10 * 10;
-    let by_points = available_points / 10 * 10;
+    let by_points = (available_points / 10.0).floor() as i64 * 10;
     by_subtotal.min(by_points)
 }
 
 /// May a bill redeem exactly `points` of the member's balance? 0 points is
 /// always allowed (no member on the bill); anything else must be a whole
-/// step of 10 within [`max_redeemable`].
-pub fn valid_redeem(points: i64, subtotal_satang: i64, available: i64) -> bool {
+/// step of 10 within [`max_redeemable`]. `available` may be fractional
+/// (earnings are multiples of 0.5); the redeemed amount itself never is.
+pub fn valid_redeem(points: i64, subtotal_satang: i64, available: f64) -> bool {
     points == 0
         || (points >= 10 && points % 10 == 0 && points <= max_redeemable(subtotal_satang, available))
 }
@@ -158,10 +165,17 @@ const PAID_COUNTER_MEMBER: &str = "customer_id IS NOT NULL AND status = 'paid'
 /// D1 batch right AFTER its own `UPDATE orders SET status = 'paid'`, so the
 /// statements below see the bill as already paid. They settle the bill's
 /// redemption (negative ledger row) and earn (positive ledger row), move
-/// `customers.points` to `MAX(0, points - redeemed) + earned`, stamp
+/// `customers.points` to `MAX(0, points - redeemed) + earned` where `earned`
+/// is `(total_amount / 5000) * 0.5` (the SQL twin of [`earn_points`]: SQLite
+/// integer division floors the `/ 5000`, and `* 0.5` makes the result a REAL
+/// — half a point per whole 50.00 ฿), stamp
 /// `customers.updated_at = paid_at` (the ONLY place that ever writes it — it
 /// is the expiry/erasure "last used" clock) and backfill
 /// `orders.points_earned`.
+///
+/// NOTE the point columns are REAL since migration 0013 (they were INTEGER in
+/// `STRICT` tables, which rejects any `x.5` value) — that migration must be
+/// applied before this rule goes live.
 ///
 /// Every statement is a no-op unless the bill is a paid, non-staff-meal
 /// counter bill with a member ([`PAID_COUNTER_MEMBER`]), and a REPLAY of the
@@ -181,7 +195,8 @@ const PAID_COUNTER_MEMBER: &str = "customer_id IS NOT NULL AND status = 'paid'
 ///    statement 1 left it, i.e. the post-settle balance: the earn row shows
 ///    the final balance, the redeem row shows `balance - earned` — the two
 ///    rows agree with each other and with `customers.points`.
-/// 3. `UPDATE orders SET points_earned = total_amount / 10000` — recomputes
+/// 3. `UPDATE orders SET points_earned = (total_amount / 5000) * 0.5` —
+///    recomputes
 ///    an absolute value from the same row, so it is idempotent by
 ///    construction; it writes nothing the guards above depend on.
 pub fn settle_statements(
@@ -195,7 +210,7 @@ pub fn settle_statements(
         d1.prepare(format!(
             "UPDATE customers
              SET points = MAX(0, points - (SELECT o.points_redeemed FROM orders o WHERE o.id = ?1))
-                        + (SELECT o.total_amount FROM orders o WHERE o.id = ?1) / 10000,
+                        + ((SELECT o.total_amount FROM orders o WHERE o.id = ?1) / 5000) * 0.5,
                  updated_at = (SELECT o.paid_at FROM orders o WHERE o.id = ?1)
              WHERE id = (SELECT o.customer_id FROM orders o
                          WHERE o.id = ?1 AND {PAID_COUNTER_MEMBER})
@@ -209,29 +224,29 @@ pub fn settle_statements(
             "INSERT INTO point_ledger
                (id, customer_id, shop_id, order_id, kind, points, balance_after, created_at)
              SELECT lower(hex(randomblob(16))), o.customer_id, o.shop_id, o.id, 'redeem',
-                    -o.points_redeemed, c.points - o.total_amount / 10000, ?2
+                    -o.points_redeemed, c.points - (o.total_amount / 5000) * 0.5, ?2
              FROM orders o JOIN customers c ON c.id = o.customer_id
              WHERE o.id = ?1 AND {PAID_COUNTER_MEMBER} AND o.points_redeemed > 0
                AND NOT EXISTS (SELECT 1 FROM point_ledger pl
                                WHERE pl.order_id = ?1 AND pl.kind = 'redeem')"
         ))
         .bind(&[txt(order_id), int(now)])?,
-        // (b2) the earn: positive, only when a whole point was paid for, and
-        //      the member's final balance.
+        // (b2) the earn: positive, only when at least half a point was paid
+        //      for, and the member's final balance.
         d1.prepare(format!(
             "INSERT INTO point_ledger
                (id, customer_id, shop_id, order_id, kind, points, balance_after, created_at)
              SELECT lower(hex(randomblob(16))), o.customer_id, o.shop_id, o.id, 'earn',
-                    o.total_amount / 10000, c.points, ?2
+                    (o.total_amount / 5000) * 0.5, c.points, ?2
              FROM orders o JOIN customers c ON c.id = o.customer_id
-             WHERE o.id = ?1 AND {PAID_COUNTER_MEMBER} AND o.total_amount / 10000 > 0
+             WHERE o.id = ?1 AND {PAID_COUNTER_MEMBER} AND (o.total_amount / 5000) * 0.5 > 0
                AND NOT EXISTS (SELECT 1 FROM point_ledger pl
                                WHERE pl.order_id = ?1 AND pl.kind = 'earn')"
         ))
         .bind(&[txt(order_id), int(now)])?,
         // (c) what the bill earned, for the receipt and the day view.
         d1.prepare(format!(
-            "UPDATE orders SET points_earned = total_amount / 10000
+            "UPDATE orders SET points_earned = (total_amount / 5000) * 0.5
              WHERE id = ?1 AND {PAID_COUNTER_MEMBER}"
         ))
         .bind(&[txt(order_id)])?,
@@ -457,65 +472,84 @@ mod tests {
     }
 
     #[test]
-    fn earn_is_one_point_per_hundred_baht_floored() {
-        assert_eq!(earn_points(9_999), 0); // 99.99 ฿
-        assert_eq!(earn_points(10_000), 1); // 100.00 ฿
-        assert_eq!(earn_points(10_001), 1);
-        assert_eq!(earn_points(19_999), 1);
-        assert_eq!(earn_points(20_000), 2);
-        assert_eq!(earn_points(25_000), 2); // 250.00 ฿
+    fn earn_is_half_a_point_per_fifty_baht_floored() {
+        // Every whole 50.00 ฿ of the bill is worth half a point; the last
+        // partial 50 ฿ earns nothing (49.99 ฿ -> 0, 50.00 ฿ -> 0.5).
+        assert_eq!(earn_points(4_999), 0.0); // 49.99 ฿
+        assert_eq!(earn_points(5_000), 0.5); // 50.00 ฿
+        assert_eq!(earn_points(9_999), 0.5); // 99.99 ฿
+        assert_eq!(earn_points(10_000), 1.0); // 100.00 ฿
+        assert_eq!(earn_points(14_999), 1.0);
+        assert_eq!(earn_points(15_000), 1.5); // 150.00 ฿
+        assert_eq!(earn_points(20_000), 2.0); // 200.00 ฿
+        assert_eq!(earn_points(25_000), 2.5); // 250.00 ฿
         // A free bill (or a nonsense negative one) earns nothing, never
-        // fractional, never negative.
-        assert_eq!(earn_points(0), 0);
-        assert_eq!(earn_points(-10_000), 0);
-        assert_eq!(earn_points(5_000), 0);
+        // negative, and every earn is a whole multiple of 0.5.
+        assert_eq!(earn_points(0), 0.0);
+        assert_eq!(earn_points(-10_000), 0.0);
+        for total in [0_i64, 4_999, 5_000, 10_000, 15_000, 123_500] {
+            let earned = earn_points(total);
+            assert!((earned * 2.0).fract() == 0.0, "{total} ฿ -> {earned}");
+        }
     }
 
     #[test]
     fn redemption_moves_in_whole_steps_of_ten_points() {
         // 250.00 ฿ subtotal: floor(25000/100) = 250 points of headroom, but
         // the balance of 100 caps the step.
-        assert_eq!(max_redeemable(25_000, 100), 100);
+        assert_eq!(max_redeemable(25_000, 100.0), 100);
         // The balance itself only leaves whole steps of 10 (15 -> one step).
-        assert_eq!(max_redeemable(25_000, 15), 10);
-        assert_eq!(max_redeemable(25_000, 20), 20);
-        assert_eq!(max_redeemable(25_000, 9), 0);
+        assert_eq!(max_redeemable(25_000, 15.0), 10);
+        assert_eq!(max_redeemable(25_000, 20.0), 20);
+        assert_eq!(max_redeemable(25_000, 9.0), 0);
+        // A fractional balance (earning is 0.5 per 50 ฿) keeps the same rule:
+        // the half above a whole step can never be spent, only whole steps of
+        // 10 count — 19.5 -> one step, 10.5 -> one step, 9.5 -> none.
+        assert_eq!(max_redeemable(25_000, 19.5), 10);
+        assert_eq!(max_redeemable(25_000, 20.5), 20);
+        assert_eq!(max_redeemable(25_000, 10.5), 10);
+        assert_eq!(max_redeemable(25_000, 9.5), 0);
         // A huge balance lets the bill be the cap: 45.00 ฿ is 45 points of
         // headroom -> 40.
-        assert_eq!(max_redeemable(4_500, 1_000), 40);
+        assert_eq!(max_redeemable(4_500, 1_000.0), 40);
         // The bill must cover the step: 10.00 ฿ exactly is one step, 9.99 ฿
         // is none, 19.99 ฿ is still one, 20.00 ฿ is two.
-        assert_eq!(max_redeemable(1_000, 100), 10);
-        assert_eq!(max_redeemable(999, 100), 0);
-        assert_eq!(max_redeemable(1_999, 100), 10);
-        assert_eq!(max_redeemable(2_000, 100), 20);
+        assert_eq!(max_redeemable(1_000, 100.0), 10);
+        assert_eq!(max_redeemable(999, 100.0), 0);
+        assert_eq!(max_redeemable(1_999, 100.0), 10);
+        assert_eq!(max_redeemable(2_000, 100.0), 20);
         // A free (or nonsense negative) bill redeems nothing at all.
-        assert_eq!(max_redeemable(0, 100), 0);
-        assert_eq!(max_redeemable(-5_000, 100), 0);
-        assert_eq!(max_redeemable(25_000, 0), 0);
-        assert_eq!(max_redeemable(25_000, -3), 0);
+        assert_eq!(max_redeemable(0, 100.0), 0);
+        assert_eq!(max_redeemable(-5_000, 100.0), 0);
+        assert_eq!(max_redeemable(25_000, 0.0), 0);
+        assert_eq!(max_redeemable(25_000, -3.0), 0);
     }
 
     #[test]
     fn valid_redeem_is_zero_or_a_whole_step_within_the_bounds() {
         // 0 points is always fine: that is "no member on this bill".
-        assert!(valid_redeem(0, 0, 0));
+        assert!(valid_redeem(0, 0, 0.0));
         let subtotal = 25_000; // 250.00 ฿: the balance caps each case below
-        assert!(valid_redeem(10, subtotal, 20));
-        assert!(valid_redeem(20, subtotal, 20));
-        assert!(valid_redeem(10, subtotal, 1_000));
+        assert!(valid_redeem(10, subtotal, 20.0));
+        assert!(valid_redeem(20, subtotal, 20.0));
+        assert!(valid_redeem(10, subtotal, 1_000.0));
+        // A fractional balance behaves exactly like the whole one below it:
+        // 19.5 points still cover one step of 10, but never two.
+        assert!(valid_redeem(10, subtotal, 19.5));
+        assert!(!valid_redeem(20, subtotal, 19.5));
+        assert!(valid_redeem(20, subtotal, 20.5));
         // Not a step of 10, below the minimum, above the balance, above the
         // bill, or negative: all refused.
-        assert!(!valid_redeem(5, subtotal, 20));
-        assert!(!valid_redeem(15, subtotal, 20));
-        assert!(!valid_redeem(25, subtotal, 20));
-        assert!(!valid_redeem(20, subtotal, 19));
-        assert!(!valid_redeem(-10, subtotal, 20));
+        assert!(!valid_redeem(5, subtotal, 20.0));
+        assert!(!valid_redeem(15, subtotal, 20.0));
+        assert!(!valid_redeem(25, subtotal, 20.0));
+        assert!(!valid_redeem(20, subtotal, 19.0));
+        assert!(!valid_redeem(-10, subtotal, 20.0));
         // A 45.00 ฿ bill gives 40 points of headroom (floor 45 -> 40).
-        assert!(valid_redeem(40, 4_500, 100));
-        assert!(!valid_redeem(50, 4_500, 100));
+        assert!(valid_redeem(40, 4_500, 100.0));
+        assert!(!valid_redeem(50, 4_500, 100.0));
         // Less than 10.00 ฿ on the bill redeems nothing, whatever the card.
-        assert!(!valid_redeem(10, 999, 1_000));
+        assert!(!valid_redeem(10, 999, 1_000.0));
     }
 
     #[test]
