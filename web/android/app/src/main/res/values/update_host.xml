@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The ONLY host the ApkInstaller plugin will download an update from (the
+         production API origin, see web/.env.android). Pinned natively so that
+         JS running in the WebView cannot point the installer elsewhere. -->
+    <string name="apk_update_host" translatable="false">pos.twostackmaxgame.win</string>
+</resources>

@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.Signature;
 import android.net.Uri;
 import android.os.Build;
 import android.os.SystemClock;
@@ -30,7 +31,10 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -139,6 +143,10 @@ public class ApkInstallerPlugin extends Plugin {
             call.reject("only https URLs are allowed", "invalid_url");
             return;
         }
+        if (!url.getHost().equalsIgnoreCase(getContext().getString(R.string.apk_update_host))) {
+            call.reject("update host is not allowed", "invalid_url");
+            return;
+        }
         if (expectedSha256 == null || !expectedSha256.trim().matches("^[0-9a-fA-F]{64}$")) {
             call.reject("sha256 must be a hex encoded SHA-256 digest", "invalid_arguments");
             return;
@@ -167,6 +175,16 @@ public class ApkInstallerPlugin extends Plugin {
                     call.reject("Downloaded update failed the integrity check", "sha_mismatch");
                     return;
                 }
+            }
+
+            // The digest only proves the bytes match the manifest; also require
+            // that this is OUR app (same package) signed by OUR certificate and
+            // newer than what is installed, so the installer can never be used
+            // for an unrelated app even if the API/manifest were compromised.
+            if (!isOurUpdate(apkFile)) {
+                deleteQuietly(apkFile);
+                call.reject("Update does not belong to this app", "package_mismatch");
+                return;
             }
 
             // Keep the verified APK around when the user must grant the
@@ -205,8 +223,9 @@ public class ApkInstallerPlugin extends Plugin {
     private HttpURLConnection openFollowingHttpsRedirects(URL initialUrl) throws IOException {
         URL current = initialUrl;
         for (int hop = 0; hop <= MAX_REDIRECTS; hop++) {
-            if (!"https".equalsIgnoreCase(current.getProtocol())) {
-                throw new DownloadException("Redirect target is not https");
+            if (!"https".equalsIgnoreCase(current.getProtocol())
+                || !current.getHost().equalsIgnoreCase(getContext().getString(R.string.apk_update_host))) {
+                throw new DownloadException("Redirect target is not allowed");
             }
             HttpURLConnection connection = (HttpURLConnection) current.openConnection();
             connection.setInstanceFollowRedirects(false);
@@ -310,6 +329,55 @@ public class ApkInstallerPlugin extends Plugin {
         } catch (RuntimeException ex) { // includes ActivityNotFoundException
             Logger.warn(getLogTag(), "Unable to start the package installer: " + ex.getClass().getSimpleName());
             call.reject("Unable to start the package installer", "install_failed");
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static Set<String> certDigests(Signature[] sigs) throws NoSuchAlgorithmException {
+        Set<String> out = new HashSet<>();
+        if (sigs == null) return out;
+        for (Signature sig : sigs) {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] d = md.digest(sig.toByteArray());
+            StringBuilder hex = new StringBuilder();
+            for (byte b : d) {
+                hex.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+            }
+            out.add(hex.toString());
+        }
+        return out;
+    }
+
+    @SuppressWarnings("deprecation")
+    private static Signature[] signersOf(PackageInfo info) {
+        if (info == null) return null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            if (info.signingInfo == null) return null;
+            return info.signingInfo.hasMultipleSigners()
+                ? info.signingInfo.getApkContentsSigners()
+                : info.signingInfo.getSigningCertificateHistory();
+        }
+        return info.signatures;
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean isOurUpdate(File apk) {
+        try {
+            PackageManager pm = getContext().getPackageManager();
+            int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                ? PackageManager.GET_SIGNING_CERTIFICATES
+                : PackageManager.GET_SIGNATURES;
+            PackageInfo archive = pm.getPackageArchiveInfo(apk.getAbsolutePath(), flags);
+            PackageInfo installed = pm.getPackageInfo(getContext().getPackageName(), flags);
+            if (archive == null || installed == null) return false;
+            if (!getContext().getPackageName().equals(archive.packageName)) return false;
+            if (PackageInfoCompat.getLongVersionCode(archive) <= PackageInfoCompat.getLongVersionCode(installed)) return false;
+            Set<String> a = certDigests(signersOf(archive));
+            Set<String> b = certDigests(signersOf(installed));
+            return !a.isEmpty() && a.equals(b);
+        } catch (Exception ex) {
+            Logger.warn(getLogTag(), "APK verification failed: " + ex.getClass().getSimpleName());
+            return false;
         }
     }
 

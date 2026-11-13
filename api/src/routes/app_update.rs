@@ -39,7 +39,7 @@ use serde::Deserialize;
 use serde_json::json;
 use sha2::Sha256;
 
-use crate::auth::staff::StaffAuth;
+use crate::auth::device::DeviceAuth;
 use crate::util::now_ms;
 use crate::{auth, db, error::ApiError, AppState};
 
@@ -268,8 +268,9 @@ fn gate_exempt(rest: &str) -> bool {
     under("app")
         || under("owner")
         || under("slip-agent")
-        // `/api/health*` (health, healthz, ...) — probes must never be gated.
-        || rest.starts_with("health")
+        // health probes must never be gated (exact names, not a prefix match).
+        || under("health")
+        || rest == "healthz"
         || rest == "beam/webhook"
 }
 
@@ -396,13 +397,16 @@ fn now_secs() -> i64 {
     now_ms() / 1000
 }
 
-/// `GET /api/app/manifest` — staff auth (same extractor as `/api/menu`): the
-/// POS checks for updates from inside a logged-in session.
+/// `GET /api/app/manifest` — approved-DEVICE auth (X-Device-Token), deliberately
+/// NOT a staff session: an outdated app that is logged out (session expired, PIN
+/// reset) is gated with 426 at PIN login and must still be able to fetch its
+/// update. Pending/revoked devices get 403.
 #[worker::send]
 pub async fn manifest(
     State(state): State<AppState>,
-    _staff: StaffAuth,
+    device: DeviceAuth,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    device.require_approved()?;
     let m = cached_manifest(state.env.clone()).await.ok_or_else(|| {
         ApiError::coded(
             StatusCode::NOT_FOUND,

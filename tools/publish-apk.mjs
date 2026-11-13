@@ -240,7 +240,7 @@ function resolveRunner() {
     path.join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npx-cli.js'), // Unix layout
   ];
   const npxCli = npxCandidates.find((c) => fs.existsSync(c));
-  if (npxCli) return { label: 'npx wrangler', argv: [npxCli, '--yes', 'wrangler'] };
+  if (npxCli) return { label: 'npx wrangler', argv: [npxCli, '--yes', 'wrangler@4.45.0'] };
   throw new Fail(1, 'no wrangler found: npm install wrangler in the repo (or api/), or make npx available');
 }
 
