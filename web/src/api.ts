@@ -1,5 +1,11 @@
 // Typed fetch wrapper for the Rust Worker API (served under /api).
 
+// Force-update (feat/app-update): the native app reports the build it runs so
+// the server can answer 426, and the pure decision helpers + the ApkInstaller
+// plugin wrapper live beside it. apkInstaller.ts never imports this file.
+import { nativeAppVersion } from './native/apkInstaller'
+import type { AppManifest } from './native/apkInstaller'
+
 /**
  * Origin every /api/... request is prefixed with. "" (VITE_API_BASE unset) is
  * the normal web build: same-origin relative URLs, byte-identical to before.
@@ -41,13 +47,129 @@ export class ApiError extends Error {
   }
 }
 
+// ---- force update (feat/app-update) ---------------------------------------
+// Every /api response passes through this block. A 426 upgrade_required is the
+// ONLY thing that can block the app; the X-App-Latest header of any other
+// response only feeds the dismissible new-version banner of UpdateGate. A
+// request that never reached a decision (network error = status 0, or a 5xx)
+// records NOTHING - undecidable is never treated as update required.
+
+/** What a 426 told us: the newest build and the oldest one still allowed. */
+export interface UpgradeRequired {
+  latest: number
+  minSupported: number
+}
+
+let upgradeRequired: UpgradeRequired | null = null
+let latestVersionCode: number | null = null
+const appVersionListeners = new Set<() => void>()
+
+function finiteCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function notifyAppVersion(): void {
+  for (const listener of appVersionListeners) listener()
+}
+
+/**
+ * 426 {error:'upgrade_required', latest:int, minSupported:int} - record it for
+ * UpdateGate. It is NOT an auth failure and is never retried: the call still
+ * throws its normal ApiError (code 'upgrade_required'); the gate simply covers
+ * the screen so nothing underneath is reachable.
+ */
+function noteUpgradeRequired(extra: Record<string, unknown>): void {
+  const latest = finiteCount(extra['latest'])
+  const minSupported = finiteCount(extra['minSupported'])
+  const next: UpgradeRequired = {
+    latest: latest ?? upgradeRequired?.latest ?? 0,
+    minSupported: minSupported ?? upgradeRequired?.minSupported ?? 0,
+  }
+  if (
+    upgradeRequired !== null &&
+    upgradeRequired.latest === next.latest &&
+    upgradeRequired.minSupported === next.minSupported
+  ) {
+    return
+  }
+  upgradeRequired = next
+  notifyAppVersion()
+}
+
+/** X-App-Latest on a healthy response: the newest versionCode, banner only. */
+function noteLatestHeader(res: Response): void {
+  const raw = res.headers.get('X-App-Latest')
+  if (raw === null || raw === '') return
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 0) return
+  if (latestVersionCode !== null && latestVersionCode >= n) return
+  latestVersionCode = n
+  notifyAppVersion()
+}
+
+/** Non-null once a 426 was received: UpdateGate must block the whole app. */
+export function getUpgradeRequired(): UpgradeRequired | null {
+  return upgradeRequired
+}
+
+/** Newest versionCode the server mentioned in X-App-Latest (null = never). */
+export function getLatestVersionCode(): number | null {
+  return latestVersionCode
+}
+
+/** Subscribe to the two values above; returns the unsubscribe function. */
+export function subscribeAppVersion(listener: () => void): () => void {
+  appVersionListeners.add(listener)
+  return () => {
+    appVersionListeners.delete(listener)
+  }
+}
+
+/** Typed check for 'the server refused this build' (not auth, not network). */
+export function isUpgradeRequiredError(e: unknown): boolean {
+  return e instanceof ApiError && (e.status === 426 || e.code === 'upgrade_required')
+}
+
+/**
+ * X-App-Version on every request the native app makes (browsers/PWA send
+ * nothing). The versionCode is read through the ApkInstaller plugin once and
+ * cached; when the plugin is missing or throws, no header is sent at all.
+ */
+async function appVersionHeader(): Promise<Record<string, string>> {
+  const v = await nativeAppVersion()
+  return v === null ? {} : { 'X-App-Version': String(v.versionCode) }
+}
+
+/** Shared body parser of api()/apiBinary(): JSON when possible, ApiError when !ok. */
+async function readResponse(res: Response): Promise<unknown> {
+  const text = await res.text()
+  let data: unknown
+  if (text) {
+    try {
+      data = JSON.parse(text)
+    } catch {
+      data = undefined
+    }
+  }
+  if (!res.ok) {
+    const obj = (data !== null && typeof data === 'object' ? data : {}) as Record<string, unknown>
+    const code = typeof obj['error'] === 'string' ? obj['error'] : `http_${res.status}`
+    const message = typeof obj['message'] === 'string' ? obj['message'] : `HTTP ${res.status}`
+    if (res.status === 426 || code === 'upgrade_required') noteUpgradeRequired(obj)
+    else noteLatestHeader(res)
+    throw new ApiError(res.status, code, message, obj)
+  }
+  noteLatestHeader(res)
+  return data
+}
+
 export async function api<T = unknown>(
   method: string,
   path: string,
   body?: unknown,
   auth: AuthMode = 'none',
 ): Promise<T> {
-  const headers: Record<string, string> = {}
+  const headers: Record<string, string> = await appVersionHeader()
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   if (auth === 'device' || auth === 'both') {
     const token = localStorage.getItem(DEVICE_TOKEN_KEY)
@@ -67,22 +189,7 @@ export async function api<T = unknown>(
   } catch {
     throw new ApiError(0, 'network', 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้')
   }
-  const text = await res.text()
-  let data: unknown
-  if (text) {
-    try {
-      data = JSON.parse(text)
-    } catch {
-      data = undefined
-    }
-  }
-  if (!res.ok) {
-    const obj = (data !== null && typeof data === 'object' ? data : {}) as Record<string, unknown>
-    const code = typeof obj['error'] === 'string' ? obj['error'] : `http_${res.status}`
-    const message = typeof obj['message'] === 'string' ? obj['message'] : `HTTP ${res.status}`
-    throw new ApiError(res.status, code, message, obj)
-  }
-  return data as T
+  return (await readResponse(res)) as T
 }
 
 /**
@@ -94,29 +201,14 @@ async function apiBinary<T>(method: string, path: string, blob: Blob, contentTyp
   try {
     res = await fetch(apiUrl(path), {
       method,
-      headers: { 'Content-Type': contentType },
+      headers: { 'Content-Type': contentType, ...(await appVersionHeader()) },
       credentials: 'same-origin',
       body: blob,
     })
   } catch {
     throw new ApiError(0, 'network', 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้')
   }
-  const text = await res.text()
-  let data: unknown
-  if (text) {
-    try {
-      data = JSON.parse(text)
-    } catch {
-      data = undefined
-    }
-  }
-  if (!res.ok) {
-    const obj = (data !== null && typeof data === 'object' ? data : {}) as Record<string, unknown>
-    const code = typeof obj['error'] === 'string' ? obj['error'] : `http_${res.status}`
-    const message = typeof obj['message'] === 'string' ? obj['message'] : `HTTP ${res.status}`
-    throw new ApiError(res.status, code, message, obj)
-  }
-  return data as T
+  return (await readResponse(res)) as T
 }
 
 /** Public, forever-cached URL of a stored image (MenuItem.image_key). */
@@ -144,6 +236,16 @@ export function deleteMenuImage(itemId: string): Promise<MenuItem> {
 /** GET /api/owner/media-usage */
 export function getMediaUsage(): Promise<MediaUsage> {
   return api<MediaUsage>('GET', '/api/owner/media-usage')
+}
+
+/**
+ * GET /api/app/manifest - the newest APK build the server offers, for the
+ * native force-update check (shape = AppManifest of native/apkInstaller.ts).
+ * Authenticated like every other staff call; UpdateGate treats any failure
+ * (offline, 5xx, not logged in) as silent and never blocks on it.
+ */
+export function getAppManifest(): Promise<AppManifest> {
+  return api<AppManifest>('GET', '/api/app/manifest', undefined, 'both')
 }
 
 // ---- owner slips (slip reader phase 1): upload photos -> AI reads them ----
@@ -186,13 +288,22 @@ export async function deleteSlip(id: string): Promise<void> {
 export async function slipPageUrl(id: string, page: number): Promise<string> {
   let res: Response
   try {
-    res = await fetch(apiUrl(`/api/owner/slips/${encodeURIComponent(id)}/pages/${page}`))
+    res = await fetch(apiUrl(`/api/owner/slips/${encodeURIComponent(id)}/pages/${page}`), {
+      headers: await appVersionHeader(),
+    })
   } catch {
     throw new ApiError(0, 'network', 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้')
   }
   if (!res.ok) {
+    // the same 426 handling as readResponse(): record it, do not guess a code
+    if (res.status === 426) {
+      noteUpgradeRequired({})
+      throw new ApiError(res.status, 'upgrade_required', `HTTP ${res.status}`)
+    }
+    noteLatestHeader(res)
     throw new ApiError(res.status, `http_${res.status}`, `HTTP ${res.status}`)
   }
+  noteLatestHeader(res)
   return URL.createObjectURL(await res.blob())
 }
 
@@ -230,6 +341,8 @@ export function friendlyError(e: unknown): string {
       return 'ข้อมูลซ้ำหรือสถานะเปลี่ยนไปแล้ว กรุณารีเฟรช'
     case 'bad_request':
       return 'ข้อมูลไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง'
+    case 'upgrade_required':
+      return 'ต้องอัปเดตแอปก่อนใช้งานต่อ'
     default:
       return 'เกิดข้อผิดพลาด ลองใหม่อีกครั้ง'
   }

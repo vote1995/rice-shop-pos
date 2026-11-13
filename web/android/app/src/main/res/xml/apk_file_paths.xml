@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+        ApkInstaller plugin: expose ONLY the private update cache directory
+        (<cacheDir>/apk-update/) to the system package installer. Keep this
+        narrower than res/xml/file_paths.xml on purpose.
+    -->
+    <cache-path name="apk-update" path="apk-update/" />
+</paths>

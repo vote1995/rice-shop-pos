@@ -29,15 +29,18 @@ pub const ENV_VAR: &str = "CORS_ALLOWED_ORIGINS";
 /// Everything the staff POS sends. Auth is header-based, so no cookie header.
 /// `If-None-Match` is not CORS-safelisted, yet the POS revalidates `/api/menu`
 /// and `/api/media/*` with it (api/src/routes/menu.rs, api/src/routes/media.rs).
-const ALLOW_HEADERS: &str = "Content-Type, Authorization, X-Device-Token, If-None-Match";
+/// `X-App-Version` rides along on every call so the API can gate outdated
+/// builds (api/src/routes/app_update.rs).
+const ALLOW_HEADERS: &str = "Content-Type, Authorization, X-Device-Token, If-None-Match, X-App-Version";
 /// Every method the in-scope API uses.
 const ALLOW_METHODS: &str = "GET, POST, PUT, DELETE, OPTIONS";
 /// One day: the WebView outlives that easily, so preflights are not re-sent.
 const MAX_AGE: &str = "86400";
-/// The only in-scope response header that is not CORS-safelisted: `/api/media/*`
+/// The only in-scope response headers that are not CORS-safelisted: `/api/media/*`
 /// sends `ETag` and the client revalidates with `If-None-Match`
-/// (api/src/routes/media.rs). `Cache-Control` etc. are safelisted already.
-const EXPOSE_HEADERS: &str = "ETag";
+/// (api/src/routes/media.rs); `X-App-Latest` lets the POS notice a newer APK
+/// (api/src/routes/app_update.rs). `Cache-Control` etc. are safelisted already.
+const EXPOSE_HEADERS: &str = "ETag, X-App-Latest";
 
 /// Parse the env var: comma-separated origins, each trimmed, empties dropped.
 pub fn parse_allowlist(raw: Option<&str>) -> Vec<String> {
@@ -359,16 +362,18 @@ mod tests {
         );
         assert_eq!(
             h.get(header::ACCESS_CONTROL_ALLOW_HEADERS).unwrap(),
-            "Content-Type, Authorization, X-Device-Token, If-None-Match"
+            "Content-Type, Authorization, X-Device-Token, If-None-Match, X-App-Version"
         );
         // `If-None-Match` is the one non-safelisted request header the POS
         // sends, so a preflight without it in the list would be rejected by
-        // the browser and every revalidation would break.
+        // the browser and every revalidation would break. `X-App-Version`
+        // (non-safelisted too) is needed for the minimum-version gate.
         for required in [
             "Content-Type",
             "Authorization",
             "X-Device-Token",
             "If-None-Match",
+            "X-App-Version",
         ] {
             assert!(h
                 .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
@@ -397,7 +402,10 @@ mod tests {
             "https://localhost"
         );
         assert_eq!(h.get(header::VARY).unwrap(), "Origin");
-        assert_eq!(h.get(header::ACCESS_CONTROL_EXPOSE_HEADERS).unwrap(), "ETag");
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_EXPOSE_HEADERS).unwrap(),
+            "ETag, X-App-Latest"
+        );
         assert!(h.get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS).is_none());
         // Vary is appended, not clobbered.
         add_response_headers(&mut h, "https://localhost");

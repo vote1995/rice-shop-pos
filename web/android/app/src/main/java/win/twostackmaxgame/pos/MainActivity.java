@@ -12,6 +12,12 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Locally-bundled plugins are not listed in capacitor.plugins.json
+        // (only npm packages synced via `npx cap sync` are), so register them
+        // manually. Must happen before super.onCreate(), which builds the
+        // bridge and instantiates the registered plugins.
+        registerPlugin(ApkInstallerPlugin.class);
+
         super.onCreate(savedInstanceState);
 
         // Android 15+ draws apps edge-to-edge, so the system navigation bar
