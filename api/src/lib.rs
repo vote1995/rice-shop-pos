@@ -7,6 +7,7 @@
 //! - [`error`]  — the JSON error type used by every handler
 //! - [`media`]  — R2 menu images + app-enforced free-tier quotas
 //! - [`pricing`] — the pure order-line pricing engine (no D1, no worker types)
+//! - [`monitor`] — cron outage checks + optional Telegram alerts (cron-only)
 //! - [`cors`]   — opt-in allowlist CORS for the Capacitor Android staff POS
 
 use axum::{
@@ -24,6 +25,7 @@ mod error;
 mod extract;
 mod loyalty;
 mod media;
+mod monitor;
 mod pricing;
 mod slips;
 mod routes;
@@ -42,6 +44,7 @@ pub fn router(env: Env) -> Router {
 
     let api = Router::new()
         .route("/health", get(routes::health::health))
+        .route("/health/deep", get(routes::health::deep))
         .route("/public/join/{shop_id}", get(routes::members::join_info).post(routes::members::join))
         .route("/members/lookup", post(routes::members::lookup))
         .route("/orders/{id}/member", put(routes::members::set_member))
@@ -283,7 +286,8 @@ async fn fetch(
 }
 
 /// Cron (wrangler.toml `[triggers]`, every minute): slip queue sweep —
-/// expired reader leases back to the queue, cloud fallback while the PC is off.
+/// expired reader leases back to the queue, cloud fallback while the PC is
+/// off; hourly loyalty retention; outage-alert monitor (src/monitor.rs).
 #[event(scheduled)]
 async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
     if let Err(e) = slips::sweep(&env).await {
@@ -291,5 +295,10 @@ async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
     }
     if let Err(e) = loyalty::sweep_if_due(&env).await {
         console_error!("loyalty sweep failed: {e:?}");
+    }
+    // Third, isolated job: its errors are only logged here and inside it —
+    // a monitor problem can never take the sweeps down with it.
+    if let Err(e) = monitor::run(&env).await {
+        console_error!("monitor run failed: {e:?}");
     }
 }
