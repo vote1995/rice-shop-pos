@@ -299,7 +299,7 @@ function tail(res) {
 }
 
 // "object not found" vs a real failure (auth, missing bucket, network...):
-const OBJECT_NOT_FOUND_RE = /(?:\bobject\b|\bkey\b)[^\n]{0,120}\bnot\s+(?:be\s+)?found|NoSuchKey|HTTP\s*404|status[: ]+404\b/i;
+const OBJECT_NOT_FOUND_RE = /(?:\bobject\b|\bkey\b)[^\n]{0,120}\bnot\s+(?:be\s+)?found|NoSuchKey|specified key does not exist|HTTP\s*404|status[: ]+404\b/i;
 const BUCKET_MISSING_RE = /\bbucket\b[^\n]{0,120}\bnot\s+(?:be\s+)?found|\bcould not find bucket\b/i;
 
 function objectNotFound(res) {
@@ -413,7 +413,7 @@ async function main() {
 
   let minSupported;
   if (args.soft) {
-    minSupported = current?.minSupported ?? 0;
+    minSupported = Math.max(1, current?.minSupported ?? 1); // API rejects < 1 (1 = nobody blocked)
     if (current && current.minSupported === null) {
       log('note: the published manifest has no minSupported — treating it as 0 (soft)');
     }

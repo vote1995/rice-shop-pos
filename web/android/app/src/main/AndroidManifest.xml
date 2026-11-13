@@ -42,7 +42,7 @@
             exposes ONLY the apk-update cache directory.
         -->
         <provider
-            android:name="androidx.core.content.FileProvider"
+            android:name=".ApkFileProvider"
             android:authorities="${applicationId}.apkprovider"
             android:exported="false"
             android:grantUriPermissions="true">
