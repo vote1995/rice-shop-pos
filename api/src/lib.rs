@@ -91,6 +91,11 @@ pub fn router(env: Env) -> Router {
         // the system's estimate, so the counter has to look at the shelf.
         .route("/stock/count-sheet", get(routes::stock_count::count_sheet))
         .route("/stock/count", post(routes::stock_count::count))
+        // App self-update (feat/app-update): staff-authed manifest with a
+        // signed short-lived APK link; the APK download itself authenticates
+        // with that signature only (the native downloader has no session).
+        .route("/app/manifest", get(routes::app_update::manifest))
+        .route("/app/apk", get(routes::app_update::apk))
         .route("/media/{*key}", get(routes::media::get_media))
         .route("/owner/me", get(routes::owner::me))
         .route(
@@ -222,16 +227,56 @@ async fn fetch(
         req.uri().path(),
         &allowlist,
     );
+
+    // Minimum-version gate (api/src/routes/app_update.rs): every /api/* request
+    // except the update flow itself, health, the Beam webhook, owner and
+    // slip-agent routes. Below the manifest's minSupported the caller gets a
+    // 426 with X-App-Latest instead of the handler; an unreadable/missing/
+    // invalid manifest fails open (no gate). The gate runs before the router,
+    // so it is deliberately pre-auth: an outdated app must be able to learn
+    // that it has to update even if its auth would fail.
+    let (latest, gated) = routes::app_update::gate_check(
+        env.clone(),
+        req.uri().path().to_owned(),
+        req.headers()
+            .get(routes::app_update::VERSION_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned),
+    )
+    .await;
+    // When the manifest is known, tell every gated-path response (426 included)
+    // what the latest published version is.
+    let tag_latest = |res: &mut axum::http::Response<axum::body::Body>| {
+        if let Some(v) = latest {
+            if let Ok(hv) = axum::http::HeaderValue::from_str(&v.to_string()) {
+                res.headers_mut().insert(routes::app_update::LATEST_HEADER, hv);
+            }
+        }
+    };
+
     match decision {
-        cors::Decision::Passthrough => Ok(router(env).call(req).await?),
+        cors::Decision::Passthrough => {
+            if let Some(res) = gated {
+                return Ok(res);
+            }
+            let mut res = router(env).call(req).await?;
+            tag_latest(&mut res);
+            Ok(res)
+        }
         cors::Decision::Preflight => {
             Ok(cors::preflight_response(origin.as_deref().unwrap_or_default()))
         }
         cors::Decision::Allow => {
-            let mut res = router(env).call(req).await?;
+            // The 426 gets CORS headers too: an opaque network error would
+            // leave the WebView unable to read why it was cut off.
+            let mut res = match gated {
+                Some(res) => res,
+                None => router(env).call(req).await?,
+            };
             if let Some(origin) = origin.as_deref() {
                 cors::add_response_headers(res.headers_mut(), origin);
             }
+            tag_latest(&mut res);
             Ok(res)
         }
     }

@@ -1,6 +1,7 @@
 //! HTTP handlers, grouped per resource. More route modules (auth, devices,
 //! menu, orders, ...) land in later tickets (M0+).
 
+pub mod app_update;
 pub mod device;
 pub mod health;
 pub mod media;

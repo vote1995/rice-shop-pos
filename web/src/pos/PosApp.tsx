@@ -17,6 +17,7 @@ import {
 import type { DeviceCreds, DeviceStatus, PinResponse, RegisterResponse, Staff } from '../api'
 import Counter from './Counter'
 import TopBarMenu, { applyStatusBarStyle } from './TopBarMenu'
+import UpdateGate from './UpdateGate'
 import type { ThemeChoice } from './TopBarMenu'
 
 // 3.54: auto-lock after 5 minutes without any pointer/key/touch activity.
@@ -335,6 +336,8 @@ export default function PosApp() {
   if (screen === 'revoked') {
     return (
       <div className="screen pos pos-auth" data-theme={theme.resolved}>
+        {/* force-update gate: fixed overlay / banner above everything (native only) */}
+        <UpdateGate />
         <main className="pos-auth-main">
           <div className="pos-auth-card">
             <div className="pos-auth-brand">
@@ -362,6 +365,8 @@ export default function PosApp() {
   if (screen === 'register') {
     return (
       <div className="screen pos pos-auth" data-theme={theme.resolved}>
+        {/* force-update gate: fixed overlay / banner above everything (native only) */}
+        <UpdateGate />
         <main className="pos-auth-main">
           <form className="pos-auth-card" onSubmit={registerDevice}>
             <div className="pos-auth-brand">
@@ -402,6 +407,8 @@ export default function PosApp() {
   if (screen === 'pending') {
     return (
       <div className="screen pos pos-auth" data-theme={theme.resolved}>
+        {/* force-update gate: fixed overlay / banner above everything (native only) */}
+        <UpdateGate />
         <main className="pos-auth-main">
           <div className="pos-auth-card">
             <div className="pos-auth-brand">
@@ -433,6 +440,8 @@ export default function PosApp() {
   if (screen === 'staff') {
     return (
       <div className="screen pos pos-auth" data-theme={theme.resolved}>
+        {/* force-update gate: fixed overlay / banner above everything (native only) */}
+        <UpdateGate />
         <main className="pos-auth-main">
           <div className="pos-auth-card wide">
             <div className="pos-auth-brand">
@@ -477,6 +486,8 @@ export default function PosApp() {
     const remain = lockedUntil !== null ? Math.ceil((lockedUntil - tick) / 1000) : 0
     return (
       <div className="screen pos pos-auth" data-theme={theme.resolved}>
+        {/* force-update gate: fixed overlay / banner above everything (native only) */}
+        <UpdateGate />
         <main className="pos-auth-main">
           <div className="pos-auth-card pin">
             <div className="pos-auth-user">
@@ -550,6 +561,8 @@ export default function PosApp() {
     }
     return (
       <div className="screen pos pos-home" data-theme={theme.resolved}>
+        {/* force-update gate: fixed overlay / banner above everything (native only) */}
+        <UpdateGate />
         <header className="bar">
           {/* title + shop/staff context on the left, sound toggle and
               one kebab menu on the right — the theme switch, ล็อกจอ and
@@ -586,5 +599,6 @@ export default function PosApp() {
     )
   }
 
-  return null
+  // invalid state (no screen): still keep the gate mounted so a 426 is never lost
+  return <UpdateGate />
 }
