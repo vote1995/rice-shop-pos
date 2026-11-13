@@ -23,7 +23,7 @@ shops to take cash/transfer.
 
 `GET /api/health/deep` → `{"ok","d1","r2","cron"}`; 200 when all true, 503 otherwise.
 `cron=false` means the heartbeat is older than 5 minutes (the every-minute trigger stopped).
-No details or error text are returned. `GET /api/health` stays the cheap liveness probe.
+No details or error text are returned. The result is cached 30 s per isolate (the endpoint is unauthenticated, so a hit loop cannot run up D1/R2 reads). `GET /api/health` stays the cheap liveness probe.
 
 A full D1 outage cannot be announced from inside the Worker (the state table is down too);
 that is what the external probe is for.
