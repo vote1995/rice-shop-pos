@@ -62,7 +62,7 @@ const CHANNEL_LABEL: Record<string, string> = {
 const CANCEL_REASONS = ['ลูกค้าเปลี่ยนใจ', 'สั่งผิด', 'ของหมด']
 const BANKNOTES = [20, 50, 100, 500, 1000]
 
-const ORDERS_POLL_MS = 10_000
+const ORDERS_POLL_MS = 20_000
 /** Coming back to the app refetches the menu only after this much silence. */
 const MENU_STALE_MS = 60_000
 /** Menu refresh cadence while the counter stays visible (±10% jitter below). */
@@ -569,7 +569,7 @@ export default function Counter({
     void refreshMenu()
   }, [refreshMenu])
 
-  // 10 s polling while visible + on focus + after every action
+  // 20 s polling while visible + on focus + after every action
   useEffect(() => {
     void loadOrders()
     const t = window.setInterval(() => {
@@ -1788,7 +1788,7 @@ export default function Counter({
         ) : null}
         {queueOrders.length === 0 && !ordersErr ? (
           <div style={{ padding: '40px 16px', textAlign: 'center', color: MUTED, fontSize: 15 }}>
-            ยังไม่มีคิว — อัปเดตอัตโนมัติทุก 10 วินาที
+            ยังไม่มีคิว — อัปเดตอัตโนมัติทุก 20 วินาที
           </div>
         ) : null}
         {queueOrders.map((o) => renderOrder(o))}
