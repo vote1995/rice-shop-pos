@@ -294,7 +294,9 @@ pub async fn check_d1(env: &Env) -> CheckResult {
 async fn d1_probe(env: &Env) -> Result<i64, ApiError> {
     db::db(env)?
         .prepare("SELECT 1 AS one")
-        .first::<i64>(None)
+        // the column must be named: first::<i64>(None) tries to read the whole row object as an
+        // integer, fails, and made the d1 check report "unavailable" on a healthy database
+        .first::<i64>(Some("one"))
         .await?
         .ok_or_else(|| ApiError::Internal("SELECT 1 returned no row".into()))
 }
