@@ -223,11 +223,12 @@ pub struct OrderJson {
     pub member_name: Option<String>,
     /// Points reserved on this bill (1 point = 1.00 ฿ off the total).
     pub points_redeemed: i64,
-    /// Points this bill earned, written by the settle batch when it closed.
-    pub points_earned: i64,
+    /// Points this bill earned, written by the settle batch when it closed:
+    /// half a point per whole 50.00 ฿ of the bill, so a multiple of 0.5.
+    pub points_earned: f64,
     /// The member's CURRENT balance (never the balance minus this bill's
-    /// reservation); NULL when the bill has no member.
-    pub member_points: Option<i64>,
+    /// reservation); NULL when the bill has no member. A multiple of 0.5.
+    pub member_points: Option<f64>,
     pub items: Vec<OrderItemJson>,
 }
 
@@ -281,9 +282,10 @@ struct OrderRow {
     /// subqueries, see [`ORDER_COLUMNS`]).
     customer_id: Option<String>,
     points_redeemed: i64,
-    points_earned: i64,
+    /// A multiple of 0.5 (earnings are half points, migration 0011 columns).
+    points_earned: f64,
     member_name: Option<String>,
-    member_points: Option<i64>,
+    member_points: Option<f64>,
 }
 
 /// One order_items row as D1 returns it.
@@ -1673,7 +1675,7 @@ mod tests {
             staff_meal: 0,
             customer_id: None,
             points_redeemed: 0,
-            points_earned: 0,
+            points_earned: 0.0,
             member_name: None,
             member_points: None,
         }

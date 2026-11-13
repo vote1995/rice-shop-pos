@@ -101,13 +101,15 @@ pub struct LookupBody {
 
 /// The `customer` object of the lookup response. `phone_last4` is all the
 /// counter needs to confirm the member ("คุณสมชาย ...5678 ใช่ไหมครับ").
+/// `points` / `available_points` are multiples of 0.5 (earning is half a
+/// point per whole 50.00 ฿, [`loyalty::earn_points`]).
 #[derive(Debug, Serialize)]
 pub struct MemberJson {
     pub id: String,
     pub nickname: String,
     pub phone_last4: String,
-    pub points: i64,
-    pub available_points: i64,
+    pub points: f64,
+    pub available_points: f64,
 }
 
 /// `POST /members/lookup` payload.
@@ -132,7 +134,8 @@ pub struct OwnerCustomerRow {
     id: String,
     nickname: String,
     phone: String,
-    points: i64,
+    /// A multiple of 0.5 (earnings are half points, [`loyalty::earn_points`]).
+    points: f64,
     consent_at: i64,
     /// The member's LAST service use (a paid bill) — the clock of the
     /// 6-month expiry and the 1-year erasure.
@@ -151,7 +154,8 @@ struct CustomerRow {
     id: String,
     nickname: String,
     phone: String,
-    points: i64,
+    /// A multiple of 0.5 (earnings are half points).
+    points: f64,
     reserved: i64,
 }
 
@@ -160,9 +164,11 @@ struct CustomerRow {
 // ---------------------------------------------------------------------------
 
 /// The points a member may still put on a bill: the balance minus what the
-/// member's OTHER open counter bills already reserve, never below 0.
-fn available_points(points: i64, reserved: i64) -> i64 {
-    (points - reserved).max(0)
+/// member's OTHER open counter bills already reserve, never below 0. The
+/// balance may be fractional (a multiple of 0.5), the reservations never
+/// are (redemption moves in whole steps of 10 points).
+fn available_points(points: f64, reserved: i64) -> f64 {
+    (points - reserved as f64).max(0.0)
 }
 
 /// The last four characters of a stored phone (it is normalized to 10 ASCII
@@ -644,14 +650,19 @@ mod tests {
 
     #[test]
     fn available_points_is_the_balance_minus_other_bills_never_negative() {
-        assert_eq!(available_points(120, 0), 120);
+        assert_eq!(available_points(120.0, 0), 120.0);
         // One other open bill reserves 30 of a 120-point balance.
-        assert_eq!(available_points(120, 30), 90);
+        assert_eq!(available_points(120.0, 30), 90.0);
         // Several other bills reserve together, not per bill.
-        assert_eq!(available_points(120, 20 + 40), 60);
+        assert_eq!(available_points(120.0, 20 + 40), 60.0);
         // Over-reserved (two bills raced): floored at 0, never negative.
-        assert_eq!(available_points(10, 40), 0);
-        assert_eq!(available_points(0, 0), 0);
+        assert_eq!(available_points(10.0, 40), 0.0);
+        assert_eq!(available_points(0.0, 0), 0.0);
+        // A fractional balance (0.5 point per whole 50 ฿) keeps its halves:
+        // only whole steps of 10 can ever be reserved against it.
+        assert_eq!(available_points(19.5, 0), 19.5);
+        assert_eq!(available_points(19.5, 10), 9.5);
+        assert_eq!(available_points(0.5, 10), 0.0);
     }
 
     #[test]

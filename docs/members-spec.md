@@ -2,14 +2,16 @@
 
 Decisions (owner): no phone verification (phase 1) · counter channel only · owner refunds/cancels do NOT adjust
 points · a member belongs to ONE shop · customers cannot view points themselves (they tell staff their phone).
-Money is **satang**; 1 point = ฿1 = 100 satang. Schema: `api/migrations/0011_members.sql`.
+Money is **satang**; 1 point = ฿1 = 100 satang **when redeemed**; earning is **0.5 point per whole ฿50**,
+so balances are multiples of 0.5. Schema: `api/migrations/0011_members.sql` (point columns widened to REAL by `0013_fractional_points.sql`).
 
 ## Rules (from the business rules)
-- Earn: `earned = floor(total_amount_satang / 10_000)` where `total_amount` is the bill total AFTER points were
-  deducted. Per bill, no carry-over, never fractional. Counter channel only; never for staff meals.
+- Earn: `earned = floor(total_amount_satang / 5_000) * 0.5` where `total_amount` is the bill total AFTER points were
+  deducted. Per bill, no carry-over; always a multiple of 0.5 (4 999 sat → 0, 5 000 → 0.5, 10 000 → 1.0,
+  15 000 → 1.5). Counter channel only; never for staff meals.
 - Redeem: `points_redeemed` must be a multiple of 10, ≥ 10, ≤ member's *available* points, and
   ≤ `floor(subtotal_satang / 100)` rounded down to a multiple of 10 (subtotal = sum(line_total) - discount_amount).
-  Bill total may reach 0.
+  A fractional balance only ever yields whole steps of 10 (19.5 points → one step of 10). Bill total may reach 0.
 - A member needs ≥ 10 points to redeem. 1 point = ฿1 discount.
 - `orders.total_amount = MAX(0, SUM(order_items.line_total) - discount_amount - points_redeemed*100)`.
   Every place that recomputes `total_amount` MUST subtract `points_redeemed*100`
@@ -18,7 +20,8 @@ Money is **satang**; 1 point = ฿1 = 100 satang. Schema: `api/migrations/0011_m
   customers.points - SUM(points_redeemed of the customer's other OPEN counter orders)` (open = status
   `preparing`/`served`). They are **deducted only when the payment succeeds** (cash or QR).
 - Settle (once per bill, idempotent, inside the SAME D1 batch that marks the bill paid): redeem
-  `points_redeemed`, earn `points_earned = floor(total_amount/10000)`, write ledger rows (`kind` redeem = negative,
+  `points_redeemed`, earn `points_earned = floor(total_amount/5000) * 0.5` (SQL: `(total_amount / 5000) * 0.5`),
+  write ledger rows (`kind` redeem = negative,
   earn = positive, `balance_after`), set `customers.points = MAX(0, points - redeemed) + earned`,
   `customers.updated_at = paid_at`, `orders.points_earned`. Guard with
   `NOT EXISTS (ledger row for this order & kind)`. `updated_at` is changed ONLY here (and nowhere else).
@@ -52,7 +55,8 @@ use; never sold/shared with third parties; rights = access, correct, delete, wit
   `customer_id: null` detaches (points 0). Errors: 400 invalid points, 404 member, 409 `qr_pending` / order closed /
   not a counter order / staff meal.
 - `OrderJson` gains: `customer_id: string|null`, `member_name: string|null`, `points_redeemed: number`,
-  `points_earned: number`, `member_points: number|null` (the member's CURRENT balance).
+  `points_earned: number` (a multiple of 0.5), `member_points: number|null` (the member's CURRENT balance,
+  also a multiple of 0.5).
 ### Owner (`OwnerAuth`)
 - `GET    /api/owner/shops/{shop_id}/customers?q=` → `{ customers: [{ id, nickname, phone, points,
   consent_at, updated_at }] }` (q matches phone digits or name, max 100, newest `updated_at` first).

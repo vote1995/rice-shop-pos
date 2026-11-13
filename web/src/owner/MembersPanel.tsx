@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import qrcode from 'qrcode-generator'
 import { api, friendlyError } from '../api'
 import type { OwnerCustomer } from '../api'
+import { fmtPoints } from '../pos/points'
 import { useOwnerShop } from './shopContext'
 
 /** GET …/customers never returns more than this — hint it when we hit it. */
@@ -223,7 +224,7 @@ export function MembersPanel() {
                     <strong className="grow">
                       {c.nickname}
                     </strong>
-                    <span className={`badge${c.points > 0 ? ' approved' : ''}`}>{c.points} แต้ม</span>
+                    <span className={`badge${c.points > 0 ? ' approved' : ''}`}>{fmtPoints(c.points)} แต้ม</span>
                   </div>
                   <p className="muted small">
                     {fmtPhone(c.phone)} · ใช้ล่าสุด {fmtDate(c.updated_at)} · ยินยอมข้อมูล{' '}

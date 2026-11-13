@@ -139,7 +139,7 @@ export default function JoinPage() {
             <h1>สมัครสมาชิกเรียบร้อยแล้ว</h1>
             <p className="join-lead">ครั้งต่อไปแจ้งเบอร์โทรกับพนักงานที่ร้านได้เลย</p>
             <p className="muted small center-text">
-              สมาชิก {info.shop_name} · สะสมแต้มทุกครั้งที่ซื้อ 1 แต้มต่อ 100 บาท
+              สมาชิก {info.shop_name} · สะสมแต้มทุกครั้งที่ซื้อ 50 บาท = 0.5 แต้ม
             </p>
           </div>
         ) : null}
