@@ -525,3 +525,72 @@ pub async fn recent(
     let cursor = payments.last().map(|p| p.confirmed_at).unwrap_or(since.max(from));
     Ok(Json(RecentJson { payments, cursor }))
 }
+
+// ---------------------------------------------------------------------------
+// Expiry sweep (cron)
+// ---------------------------------------------------------------------------
+
+/// How long past Beam's own `qr.expiry` a charge may stay 'pending' before the
+/// sweep gives up on it (the bank may settle a payment made just before the
+/// deadline a little late).
+pub const QR_EXPIRY_GRACE_MS: i64 = 5 * 60_000;
+/// A pending charge with NO recorded expiry (rows from before it was stored) is
+/// abandoned after this long.
+pub const NO_EXPIRY_ABANDON_MS: i64 = 24 * 60 * 60_000;
+
+/// Beam has no "expired" charge status and sends no event when a QR times out
+/// (docs list only PENDING / SUCCEEDED / FAILED), so an unpaid QR — or the QR of a
+/// cancelled / otherwise-paid bill — would stay 'pending' forever, and
+/// `members::has_pending_qr` would freeze that bill's member and points for good.
+/// This marks such rows 'expired'. It is safe for money: `settle` still accepts
+/// 'expired' payments ("the QR timed out on our side but the money is real"), so a
+/// late SUCCEEDED webhook still closes the bill.
+pub const EXPIRE_STALE_SQL: &str = "UPDATE payments SET status = 'expired', updated_at = ?1
+     WHERE method = 'promptpay' AND status = 'pending' AND beam_charge_id IS NOT NULL
+       AND ((beam_qr_expiry IS NOT NULL AND unixepoch(beam_qr_expiry) * 1000 < ?2)
+         OR (beam_qr_expiry IS NULL AND created_at < ?3))";
+
+/// The three bound cutoffs for [`EXPIRE_STALE_SQL`]: (now, expiry bound, no-expiry bound).
+pub fn expiry_cutoffs(now: i64) -> (i64, i64, i64) {
+    (now, now - QR_EXPIRY_GRACE_MS, now - NO_EXPIRY_ABANDON_MS)
+}
+
+/// Cron job: mark stale pending QR payments 'expired'. Returns how many rows changed.
+pub async fn expire_stale(env: &Env) -> Result<usize, ApiError> {
+    let (now, expiry_bound, abandon_bound) = expiry_cutoffs(now_ms());
+    let res = db::db(env)?
+        .prepare(EXPIRE_STALE_SQL)
+        .bind(&[int(now), int(expiry_bound), int(abandon_bound)])?
+        .run()
+        .await?;
+    changes(&res)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cutoffs_are_five_minutes_and_a_day_back() {
+        let (now, exp, abandon) = expiry_cutoffs(10_000_000_000);
+        assert_eq!(now, 10_000_000_000);
+        assert_eq!(exp, 10_000_000_000 - 5 * 60_000);
+        assert_eq!(abandon, 10_000_000_000 - 24 * 60 * 60_000);
+    }
+
+    #[test]
+    fn expire_sql_keeps_its_guards() {
+        // Only pending PromptPay rows that own a Beam charge, only STRICTLY past the
+        // bound, and never anything already succeeded / refunded / manual.
+        for needle in [
+            "method = 'promptpay'",
+            "status = 'pending'",
+            "beam_charge_id IS NOT NULL",
+            "unixepoch(beam_qr_expiry) * 1000 < ?2",
+            "beam_qr_expiry IS NULL AND created_at < ?3",
+        ] {
+            assert!(EXPIRE_STALE_SQL.contains(needle), "lost guard {needle}");
+        }
+        assert!(!EXPIRE_STALE_SQL.contains("succeeded"));
+    }
+}

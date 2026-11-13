@@ -56,3 +56,12 @@ Point their alert contacts at your email and a Telegram integration.
 ## Not covered yet
 
 Beam API reachability probe, per-shop device-offline alerts, weekly digest — see the plan.
+
+## Stale QR payments (`expired` sweep)
+
+Beam has no "expired" charge status and sends no event when a PromptPay QR times out, so an
+unpaid QR (or the QR of a cancelled / otherwise-paid bill) used to stay `pending` forever —
+which also froze that bill's member and points (`has_pending_qr`). The cron now marks a
+`pending` PromptPay payment `expired` once Beam's own `qr.expiry` is more than 5 minutes
+past (or 24 h after creation when no expiry was recorded). A late `SUCCEEDED` webhook still
+settles the bill, because `settle` accepts `expired` rows.
