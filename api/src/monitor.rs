@@ -74,6 +74,15 @@ pub const REMINDER_EVERY_MS: i64 = 30 * 60_000;
 /// Consecutive failing runs required before the first alert (2 = one blip is
 /// tolerated, the second failing run in a row alerts).
 pub const FAILS_BEFORE_ALERT: i64 = 2;
+/// `stuck_beam` (the only check that scans a table) runs on every Nth minute
+/// of the cron — d1 and r2 stay per-minute (one trivial call each).
+pub const STUCK_EVERY_MIN: i64 = 5;
+
+/// Is `check` due on this tick? Pure, so the cadence is unit-tested.
+pub fn check_due(check: &str, now_ms: i64) -> bool {
+    check != CHECK_STUCK_BEAM || (now_ms / 60_000) % STUCK_EVERY_MIN == 0
+}
+
 /// `/api/health/deep` reports cron=false once the heartbeat is older than
 /// 5 minutes (the cron fires every minute; a few missed ticks are noise).
 pub const CRON_STALE_MS: i64 = 5 * 60_000;
@@ -200,6 +209,16 @@ pub fn next_state(prev: Option<&State>, now_ok: bool, action: Action, now_ms: i6
         fail_count,
         since,
         last_alert_at,
+    }
+}
+
+/// Must this run be written back? Not when it is ok and the stored row is already
+/// the ok state (a missing row is written once so the table is complete). Any
+/// failing run is written (the streak counter moves), as is every transition.
+pub fn needs_write(prev: Option<&State>, next: &State) -> bool {
+    match prev {
+        None => true,
+        Some(p) => !(p.status == STATUS_OK && next.status == STATUS_OK && p.fail_count == 0 && p.last_alert_at.is_none()),
     }
 }
 
@@ -349,6 +368,9 @@ pub async fn run(env: &Env) -> Result<(), ApiError> {
 
 /// Probe one check, decide + send the alert, persist the state.
 async fn run_check(env: &Env, check: &str, now: i64) -> Result<(), ApiError> {
+    if !check_due(check, now) {
+        return Ok(());
+    }
     let (ok, detail) = probe(env, check, now).await;
     let prev = load_state(env, check).await?;
     let action = decide(prev.as_ref(), ok, now);
@@ -358,7 +380,12 @@ async fn run_check(env: &Env, check: &str, now: i64) -> Result<(), ApiError> {
         dispatch_alert(env, &text).await;
     }
     let state = next_state(prev.as_ref(), ok, action, now);
-    persist_state(env, check, &state, &detail, now).await?;
+    // Steady ok -> ok (the common case, every minute) writes NOTHING: a row is only
+    // (re)written when the streak changes, so D1 sees ~1 write per tick (the
+    // heartbeat) instead of 4.
+    if needs_write(prev.as_ref(), &state) {
+        persist_state(env, check, &state, &detail, now).await?;
+    }
     Ok(())
 }
 
@@ -633,6 +660,30 @@ mod tests {
         ] {
             assert!(STUCK_SQL.contains(needle), "lost guard {needle}");
         }
+    }
+
+    #[test]
+    fn only_stuck_beam_is_throttled_to_every_fifth_minute() {
+        let on = 5 * 60_000 * 1000; // minute 5000 -> divisible by 5
+        assert!(check_due(CHECK_STUCK_BEAM, on));
+        assert!(!check_due(CHECK_STUCK_BEAM, on + 60_000));
+        assert!(!check_due(CHECK_STUCK_BEAM, on + 4 * 60_000));
+        assert!(check_due(CHECK_STUCK_BEAM, on + 5 * 60_000));
+        assert!(check_due(CHECK_D1, on + 60_000));
+        assert!(check_due(CHECK_R2, on + 60_000));
+    }
+
+    #[test]
+    fn steady_ok_is_not_written_but_changes_are() {
+        let ok = State { status: STATUS_OK.into(), fail_count: 0, since: T0, last_alert_at: None };
+        let failing = State { status: STATUS_FAILING.into(), fail_count: 1, since: T0, last_alert_at: None };
+        assert!(needs_write(None, &ok)); // first ever run completes the table
+        assert!(!needs_write(Some(&ok), &ok)); // steady ok: no write
+        assert!(needs_write(Some(&ok), &failing)); // ok -> failing
+        assert!(needs_write(Some(&failing), &failing)); // streak counter moves
+        assert!(needs_write(Some(&failing), &ok)); // recovery
+        let alerted = State { last_alert_at: Some(T0), ..failing.clone() };
+        assert!(needs_write(Some(&alerted), &ok)); // clears last_alert_at
     }
 
     #[test]

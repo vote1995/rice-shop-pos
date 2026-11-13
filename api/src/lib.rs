@@ -297,10 +297,13 @@ async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
         console_error!("loyalty sweep failed: {e:?}");
     }
     // Unpaid / abandoned PromptPay QR payments -> 'expired' (Beam sends no expiry event).
-    match routes::promptpay::expire_stale(&env).await {
-        Ok(n) if n > 0 => console_log!("expired {n} stale QR payment(s)"),
-        Ok(_) => {}
-        Err(e) => console_error!("QR expiry sweep failed: {e:?}"),
+    // (every 5th minute: the QR deadline is only checked to the minute anyway)
+    if routes::promptpay::expire_due(util::now_ms()) {
+        match routes::promptpay::expire_stale(&env).await {
+            Ok(n) if n > 0 => console_log!("expired {n} stale QR payment(s)"),
+            Ok(_) => {}
+            Err(e) => console_error!("QR expiry sweep failed: {e:?}"),
+        }
     }
     // Third, isolated job: its errors are only logged here and inside it —
     // a monitor problem can never take the sweeps down with it.

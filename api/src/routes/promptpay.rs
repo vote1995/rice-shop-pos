@@ -545,10 +545,15 @@ pub const NO_EXPIRY_ABANDON_MS: i64 = 24 * 60 * 60_000;
 /// This marks such rows 'expired'. It is safe for money: `settle` still accepts
 /// 'expired' payments ("the QR timed out on our side but the money is real"), so a
 /// late SUCCEEDED webhook still closes the bill.
-pub const EXPIRE_STALE_SQL: &str = "UPDATE payments SET status = 'expired', updated_at = ?1
+pub const EXPIRE_STALE_SQL: &str = "UPDATE payments INDEXED BY idx_payments_pending_beam SET status = 'expired', updated_at = ?1
      WHERE method = 'promptpay' AND status = 'pending' AND beam_charge_id IS NOT NULL
        AND ((beam_qr_expiry IS NOT NULL AND unixepoch(beam_qr_expiry) * 1000 < ?2)
          OR (beam_qr_expiry IS NULL AND created_at < ?3))";
+
+/// The sweep runs on every 5th minute of the cron (it only matters to the minute).
+pub fn expire_due(now_ms: i64) -> bool {
+    (now_ms / 60_000) % 5 == 0
+}
 
 /// The three bound cutoffs for [`EXPIRE_STALE_SQL`]: (now, expiry bound, no-expiry bound).
 pub fn expiry_cutoffs(now: i64) -> (i64, i64, i64) {
@@ -579,10 +584,19 @@ mod tests {
     }
 
     #[test]
+    fn sweep_runs_every_fifth_minute() {
+        let on = 5 * 60_000 * 1000;
+        assert!(expire_due(on));
+        assert!(!expire_due(on + 60_000));
+        assert!(expire_due(on + 5 * 60_000));
+    }
+
+    #[test]
     fn expire_sql_keeps_its_guards() {
         // Only pending PromptPay rows that own a Beam charge, only STRICTLY past the
         // bound, and never anything already succeeded / refunded / manual.
         for needle in [
+            "INDEXED BY idx_payments_pending_beam",
             "method = 'promptpay'",
             "status = 'pending'",
             "beam_charge_id IS NOT NULL",
