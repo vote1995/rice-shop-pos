@@ -13,6 +13,7 @@
 // counter device should speak, not every phone that is logged in.
 
 import { TextToSpeech } from '@capacitor-community/text-to-speech'
+import { chimePeakGain } from './announceVolume'
 
 const KEY = 'pos.announce'
 
@@ -103,13 +104,16 @@ function chime(): Promise<void> {
   return new Promise((resolve) => {
     if (!ctx || ctx.state !== 'running') return resolve()
     const t = ctx.currentTime
+    // 2.5x louder in the browser, 2x in the app (announceVolume.ts, which also proves
+    // the two tones summed stay below full scale, so nothing clips)
+    const peak = chimePeakGain(NATIVE)
     for (const [i, f] of [880, 1320].entries()) {
       const o = ctx.createOscillator()
       const g = ctx.createGain()
       o.type = 'sine'
       o.frequency.value = f
       g.gain.setValueAtTime(0.0001, t + i * 0.16)
-      g.gain.exponentialRampToValueAtTime(0.35, t + i * 0.16 + 0.02)
+      g.gain.exponentialRampToValueAtTime(peak, t + i * 0.16 + 0.02)
       g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.16 + 0.3)
       o.connect(g).connect(ctx.destination)
       o.start(t + i * 0.16)
