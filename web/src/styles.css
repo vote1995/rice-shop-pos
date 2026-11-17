@@ -1973,3 +1973,173 @@ body:has(.join) { background: #f6f6f7; }
   font-size: 0.9rem;
   overflow-wrap: anywhere;
 }
+
+/* ==========================================================================
+   OWNER menu editor — reorder mode (จัดเรียง) of owner/MenuEditor.tsx.
+   Compact rows instead of the big cards: a หมวด head + one line per เมนู,
+   each with a 44x44 ⋮⋮ grip. Drag & drop only (NO ▲▼ step buttons).
+   Everything is scoped to .owner/.menu-editor and uses only the theme
+   tokens, so the light and dark themes both work.
+   ========================================================================== */
+
+/* the hint line that replaces the normal one while reorder mode is on */
+.owner .menu-editor .ro-hint {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* the whole reorderable list: one block per หมวด, stacked */
+.owner .menu-editor .menu-reorder {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* a หมวด block: its head row + its compact rows */
+.owner .menu-editor .ro-grp {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* head row: grip + หมวด name + item count */
+.owner .menu-editor .ro-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin-top: 8px;
+}
+.owner .menu-editor .ro-grp:first-child .ro-head { margin-top: 2px; }
+.owner .menu-editor .ro-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.owner .menu-editor .ro-count {
+  flex: none;
+  padding-right: 4px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* the rows of one หมวด, indented under the name */
+.owner .menu-editor .ro-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 6px;
+  min-height: 6px;
+  min-width: 0;
+}
+
+/* one compact เมนู row: grip + name + price */
+.owner .menu-editor .ro-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 1px 4px 1px 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+.owner .menu-editor .ro-item .nm {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.98rem;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.owner .menu-editor .ro-item .pr {
+  flex: none;
+  padding-right: 4px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* the ⋮⋮ grip: the ONLY element with touch-action:none, so a finger on it
+   drags instead of scrolling. 44x44 to stay a real touch target. */
+.owner .menu-editor .grip {
+  flex: none;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none;
+}
+.owner .menu-editor .grip:hover:not(:disabled),
+.owner .menu-editor .grip:active {
+  color: var(--accent);
+  transform: none;
+}
+.owner .menu-editor .grip svg { pointer-events: none; display: block; }
+
+/* the dashed slot the lifted row left behind (its height is set inline);
+   -cat marks a whole หมวด slot between two blocks */
+.owner .menu-editor .ro-gap {
+  flex: none;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  background: var(--accent-soft);
+}
+.owner .menu-editor .ro-gap-cat { border-radius: 14px; }
+
+/* the lifted clone follows the finger: fixed, above everything, unclickable.
+   Its host sits inside .menu-editor so the clone keeps the look above. */
+.owner .menu-editor .ro-ghost-host {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.owner .menu-editor .ro-lift {
+  position: fixed;
+  z-index: 100;
+  margin: 0;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  opacity: 0.97;
+  pointer-events: none;
+}
+/* a lifted หมวด block has no surface of its own: give it one so it reads as
+   a card while it floats (the row already has one) */
+.owner .menu-editor .ro-grp.ro-lift {
+  padding: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+}
+
+/* while a drag is live: no text selection anywhere, grab cursor over the list */
+body.menu-dragging { user-select: none; -webkit-user-select: none; }
+body.menu-dragging .owner .menu-editor { cursor: grabbing; }
+body.menu-dragging .owner .menu-editor .grip { cursor: grabbing; }
+@media (prefers-reduced-motion: reduce) {
+  .owner .menu-editor .ro-lift { transform: none; }
+}

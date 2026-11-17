@@ -363,7 +363,7 @@ export default function StockPanel() {
               <RecipeCard key={it.id} item={it} menu={menu} stock={stock} onOpen={setUsesFor} />
             ))}
             {activeItems.length === 0 ? (
-              <p className="muted">ยังไม่มีประเภทที่เปิดขาย — เพิ่มในแท็บ “เมนู” ก่อน</p>
+              <p className="muted">ยังไม่มีเมนูที่เปิดขาย — เพิ่มในแท็บ “เมนู” ก่อน</p>
             ) : null}
           </div>
         ) : null}
@@ -475,7 +475,7 @@ function RecipeCard({
           </div>
         )
       })}
-      {groups.length === 0 ? <p className="muted small">ยังไม่มีหัวข้อของประเภทนี้</p> : null}
+      {groups.length === 0 ? <p className="muted small">ยังไม่มีหัวข้อของเมนูนี้</p> : null}
     </div>
   )
 }

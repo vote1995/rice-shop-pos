@@ -239,6 +239,16 @@ export function getMediaUsage(): Promise<MediaUsage> {
 }
 
 /**
+ * POST /api/owner/menu-items/reorder — the whole shop's order in ONE batch:
+ * every menu item of the shop with its (possibly new) `category` and the
+ * `sort_order` of its new slot (10, 20, 30 … in the flattened order), so the
+ * owner list and the POS dropdowns end up identical.
+ */
+export function reorderMenuItems(items: ReorderMenuItemBody[]): Promise<{ ok: boolean; updated: number }> {
+  return api<{ ok: boolean; updated: number }>('POST', '/api/owner/menu-items/reorder', { items })
+}
+
+/**
  * GET /api/app/manifest - the newest APK build the server offers, for the
  * native force-update check (shape = AppManifest of native/apkInstaller.ts).
  * Authenticated like every other staff call; UpdateGate treats any failure
@@ -518,6 +528,13 @@ export interface MenuOption {
   name: string
   price_add: number
   sold_out: boolean
+  sort_order: number
+}
+
+/** One row of POST /api/owner/menu-items/reorder: where this item now sits. */
+export interface ReorderMenuItemBody {
+  id: string
+  category: string
   sort_order: number
 }
 

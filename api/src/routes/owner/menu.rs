@@ -4,6 +4,7 @@
 //! - `GET    /owner/shops/{shop_id}/menu`   whole menu of one shop (all statuses)
 //! - `POST   /owner/menu-items`             create item (idempotent by id)
 //! - `PUT    /owner/menu-items/{id}`        full replace; NO delete route (order_items reference items)
+//! - `POST   /owner/menu-items/reorder`     bulk category + sort_order in one batch
 //! - `POST   /owner/option-groups`          create group (idempotent by id)
 //! - `PUT    /owner/option-groups/{id}`     replace name/policy/sort
 //! - `DELETE /owner/option-groups/{id}`     group + its options in one batch
@@ -15,6 +16,8 @@
 //! Money is INTEGER satang everywhere (schema convention, migration 0001).
 //! D1 hands booleans back as numbers 0/1, so row structs deserialize them
 //! via [`bool_from_int`] and clients always see real JSON booleans.
+
+use std::collections::HashSet;
 
 use axum::{
     extract::{Path, State},
@@ -35,6 +38,10 @@ use crate::{db, error::ApiError, AppState};
 const MAX_SATANG: i64 = 10_000_000;
 /// Whole-percent markup cap (FEATURES 3.6): 0..=300 %.
 const MAX_MARKUP_PERCENT: i64 = 300;
+/// `POST /owner/menu-items/reorder`: 1..=500 rows per batch (one D1 batch).
+const MAX_REORDER_ITEMS: usize = 500;
+/// `sort_order` cap accepted by the reorder batch.
+const MAX_SORT_ORDER: i64 = 1_000_000;
 
 const MENU_TYPES: [&str; 2] = ["rice_curry", "made_to_order"];
 const ITEM_STATUSES: [&str; 2] = ["active", "inactive"];
@@ -140,6 +147,27 @@ pub struct UpdateMenuItemBody {
     pub sort_order: Option<i64>,
     pub status: String,
     pub sold_out: bool,
+}
+
+/// `POST /owner/menu-items/reorder`: one row per menu item to move.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReorderMenuItemsBody {
+    /// The shop whose menu is being reordered. Optional: the owner app sends
+    /// just the ids it is moving, so when it is absent the shop is taken from
+    /// the first item id (see [`reorder_menu_items`]). Either way every id
+    /// must be a row of that ONE shop.
+    #[serde(default)]
+    pub shop_id: Option<String>,
+    pub items: Vec<ReorderMenuItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReorderMenuItem {
+    pub id: String,
+    pub category: String,
+    pub sort_order: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -315,6 +343,49 @@ fn validate_menu_pricing(p: &MenuPricing) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// One reorder row after validation: the normalized id, the cleaned category
+/// and the sort order to store.
+#[derive(Debug)]
+struct ReorderRow {
+    id: String,
+    category: String,
+    sort_order: i64,
+}
+
+/// Pure part of `POST /owner/menu-items/reorder`: 1..=[`MAX_REORDER_ITEMS`]
+/// entries, no duplicate ids, uuid ids, `category` exactly like create/update
+/// ([`clean_name`]: trimmed, non-empty, at most 100 chars) and `sort_order`
+/// 0..=[`MAX_SORT_ORDER`].
+fn validate_reorder(items: &[ReorderMenuItem]) -> Result<Vec<ReorderRow>, ApiError> {
+    if items.is_empty() || items.len() > MAX_REORDER_ITEMS {
+        return Err(ApiError::BadRequest(format!(
+            "items must contain 1 to {MAX_REORDER_ITEMS} entries"
+        )));
+    }
+    let mut seen = HashSet::with_capacity(items.len());
+    let mut rows = Vec::with_capacity(items.len());
+    for item in items {
+        let id = parse_uuid(&item.id, "id")?.to_string();
+        let category = clean_name(&item.category)?;
+        if !(0..=MAX_SORT_ORDER).contains(&item.sort_order) {
+            return Err(ApiError::BadRequest(format!(
+                "sort_order must be between 0 and {MAX_SORT_ORDER}"
+            )));
+        }
+        if !seen.insert(id.clone()) {
+            return Err(ApiError::BadRequest(format!(
+                "menu item {id} appears twice in items"
+            )));
+        }
+        rows.push(ReorderRow {
+            id,
+            category,
+            sort_order: item.sort_order,
+        });
+    }
+    Ok(rows)
+}
+
 /// Pick policy of one option group. `item_menu_type` is the menu_type of the
 /// menu item the group is linked to (None = shop-wide group, no menu_item_id).
 fn validate_option_group_policy(
@@ -395,6 +466,13 @@ fn normalize_channel_markup(body: &ChannelMarkupBody) -> Result<Value, ApiError>
 struct ItemRef {
     shop_id: String,
     menu_type: String,
+}
+
+/// id + shop_id of one menu item (the reorder batch's ownership check).
+#[derive(Debug, Deserialize)]
+struct MenuItemIdRow {
+    id: String,
+    shop_id: String,
 }
 
 async fn shop_missing(env: &Env, shop_id: &str) -> Result<bool, ApiError> {
@@ -696,6 +774,84 @@ pub async fn update_menu_item(
         .run()
         .await?;
     Ok(Json(item))
+}
+
+/// Bulk reorder of the owner's menu list: one `category` + `sort_order` pair
+/// per menu item id, all applied in ONE D1 batch (atomic: a half-reordered
+/// menu is never visible).
+///
+/// Shop scoping follows create/update: the shop comes from the body when sent,
+/// else from the first item id, and every id must be a row of that one shop.
+/// The shop's ids are loaded with a single SELECT (never `id IN (...)` - up to
+/// 500 ids would blow D1's 100 bound parameters per query) and any id missing
+/// from it is the same `404` update_menu_item answers for a foreign id - and
+/// nothing is written.
+#[worker::send]
+pub async fn reorder_menu_items(
+    State(state): State<AppState>,
+    _owner: OwnerAuth,
+    ApiJson(body): ApiJson<ReorderMenuItemsBody>,
+) -> Result<Json<Value>, ApiError> {
+    let rows = validate_reorder(&body.items)?;
+    let env = &state.env;
+
+    // What scopes the batch: the shop_id from the body, or the first item id
+    // (validate_reorder guarantees at least one row, so this never misses).
+    let scope = match &body.shop_id {
+        Some(raw) => parse_uuid(raw, "shop_id")?.to_string(),
+        None => rows
+            .first()
+            .map(|row| row.id.clone())
+            .ok_or_else(|| {
+                ApiError::BadRequest(format!("items must contain 1 to {MAX_REORDER_ITEMS} entries"))
+            })?,
+    };
+    let sql = if body.shop_id.is_some() {
+        "SELECT id, shop_id FROM menu_items WHERE shop_id = ?1"
+    } else {
+        "SELECT id, shop_id FROM menu_items \
+         WHERE shop_id = (SELECT shop_id FROM menu_items WHERE id = ?1)"
+    };
+    let known = db::db(env)?
+        .prepare(sql)
+        .bind(&[txt(&scope)])?
+        .all()
+        .await?
+        .results::<MenuItemIdRow>()?
+        .into_iter()
+        .map(|row| (row.id, row.shop_id))
+        .collect::<Vec<(String, String)>>();
+    // An empty answer = no such shop (body shop_id) / no such first item.
+    let shop_id = known
+        .first()
+        .map(|(_, shop_id)| shop_id.clone())
+        .ok_or(ApiError::NotFound)?;
+    let owned = known.iter().map(|(id, _)| id.as_str()).collect::<HashSet<_>>();
+    for row in &rows {
+        if !owned.contains(row.id.as_str()) {
+            return Err(ApiError::NotFound);
+        }
+    }
+
+    let now = now_ms();
+    let update = |row: &ReorderRow| -> Result<worker::D1PreparedStatement, ApiError> {
+        Ok(db::db(env)?
+            .prepare(
+                "UPDATE menu_items SET category = ?1, sort_order = ?2, updated_at = ?3
+                 WHERE id = ?4 AND shop_id = ?5",
+            )
+            .bind(&[
+                txt(&row.category),
+                int(row.sort_order),
+                int(now),
+                txt(&row.id),
+                txt(&shop_id),
+            ])?)
+    };
+    db::db(env)?
+        .batch(rows.iter().map(update).collect::<Result<Vec<_>, _>>()?)
+        .await?;
+    Ok(Json(json!({ "ok": true, "updated": rows.len() })))
 }
 
 /// Create an option group. `menu_item_id` is optional (NULL = reusable
@@ -1195,6 +1351,76 @@ mod tests {
         assert!(bad(check_markup_rule("lineman", &rule("baht", -1))).contains("lineman"));
         assert!(bad(check_markup_rule("lineman", &rule("baht", MAX_SATANG + 1))).contains("lineman"));
         assert!(check_markup_rule("lineman", &rule("baht", MAX_SATANG)).is_ok());
+    }
+
+    #[test]
+    fn reorder_batch_size_and_duplicate_ids_are_rejected() {
+        let batch = |n: usize| -> Vec<ReorderMenuItem> {
+            (0..n)
+                .map(|i| ReorderMenuItem {
+                    id: format!("{i:032}"),
+                    category: "curry".into(),
+                    sort_order: 0,
+                })
+                .collect()
+        };
+        // Empty and over the cap.
+        assert!(bad(validate_reorder(&[])).contains("1 to 500"));
+        assert!(validate_reorder(&batch(1)).is_ok());
+        assert!(validate_reorder(&batch(MAX_REORDER_ITEMS)).is_ok());
+        assert!(matches!(
+            validate_reorder(&batch(MAX_REORDER_ITEMS + 1)),
+            Err(ApiError::BadRequest(_))
+        ));
+
+        // The same id twice is refused before anything is written (uuids are
+        // normalized, so different cases still clash).
+        let twice = vec![
+            ReorderMenuItem {
+                id: "00000000-0000-0000-0000-00000000000a".into(),
+                category: "curry".into(),
+                sort_order: 1,
+            },
+            ReorderMenuItem {
+                id: "00000000-0000-0000-0000-00000000000A".into(),
+                category: "curry".into(),
+                sort_order: 2,
+            },
+        ];
+        assert!(bad(validate_reorder(&twice)).contains("twice"));
+        // Ids are uuids, exactly like create/update.
+        let junk = vec![ReorderMenuItem {
+            id: "not-a-uuid".into(),
+            category: "curry".into(),
+            sort_order: 1,
+        }];
+        assert!(bad(validate_reorder(&junk)).contains("uuid"));
+    }
+
+    #[test]
+    fn reorder_reuses_category_rules_and_bounds_sort_order() {
+        let one = |category: &str, sort_order: i64| {
+            vec![ReorderMenuItem {
+                id: "11111111-1111-1111-1111-111111111111".into(),
+                category: category.into(),
+                sort_order,
+            }]
+        };
+        // category goes through the same clean_name() as create/update:
+        // trimmed, non-empty, at most 100 characters.
+        assert!(validate_reorder(&one("  curry  ", 0))
+            .unwrap()
+            .first()
+            .is_some_and(|row| row.category == "curry"));
+        assert!(bad(validate_reorder(&one("   ", 0))).contains("name"));
+        assert!(bad(validate_reorder(&one(&"x".repeat(101), 0))).contains("name"));
+        assert!(validate_reorder(&one(&"x".repeat(100), 0)).is_ok());
+
+        // sort_order is 0..=1_000_000.
+        assert!(validate_reorder(&one("curry", 0)).is_ok());
+        assert!(validate_reorder(&one("curry", MAX_SORT_ORDER)).is_ok());
+        assert!(bad(validate_reorder(&one("curry", -1))).contains("sort_order"));
+        assert!(bad(validate_reorder(&one("curry", MAX_SORT_ORDER + 1))).contains("sort_order"));
     }
 
     #[test]
