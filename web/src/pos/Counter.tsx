@@ -59,6 +59,20 @@ const CHANNEL_LABEL: Record<string, string> = {
   foodpanda: 'Foodpanda',
 }
 
+/** Caret of the หมวด/เมนู dropdown triggers (rotates 180° while open). */
+const CARET_ICON = (
+  <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.4">
+    <path d="M5 8l5 5 5-5" />
+  </svg>
+)
+
+/** Check mark shown at the left of the SELECTED dropdown row only. */
+const TICK_ICON = (
+  <svg className="pos-dd-tick" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.6">
+    <path d="M4 10.5l4 4 8-9" />
+  </svg>
+)
+
 const CANCEL_REASONS = ['ลูกค้าเปลี่ยนใจ', 'สั่งผิด', 'ของหมด']
 const BANKNOTES = [20, 50, 100, 500, 1000]
 
@@ -228,8 +242,8 @@ type MenuLoadResult = 'ok' | 'failed' | 'auth'
 
 // ---------------------------------------------------------------------------
 // Button styles. Only the generic bits live here (all colours are theme
-// tokens); the segmented channel row, the text type tabs and the choice cards
-// are the `.pos-*` classes in styles.css, because they need media queries.
+// tokens); the segmented channel row, the หมวด/เมนู dropdowns and the choice
+// cards are the `.pos-*` classes in styles.css, because they need media queries.
 // ---------------------------------------------------------------------------
 
 const S = {
@@ -314,6 +328,8 @@ function LongPressButton({
   onTap,
   children,
   ariaLabel,
+  role,
+  ariaSelected,
 }: {
   style?: CSSProperties
   className?: string
@@ -321,6 +337,9 @@ function LongPressButton({
   onTap: () => void
   children: ReactNode
   ariaLabel?: string
+  /** dropdown option rows pass role="option" / aria-selected through */
+  role?: 'option'
+  ariaSelected?: boolean
 }) {
   const timer = useRef<number | null>(null)
   const fired = useRef(false)
@@ -353,6 +372,8 @@ function LongPressButton({
     <button
       type="button"
       aria-label={ariaLabel}
+      role={role}
+      aria-selected={ariaSelected}
       className={className}
       style={style}
       onPointerDown={down}
@@ -398,6 +419,9 @@ export default function Counter({
   const [drafts, setDrafts] = useState<Drafts>(loadDrafts)
   const [typeId, setTypeId] = useState<string | null>(null)
   const [picks, setPicks] = useState<string[]>([])
+  /** Which dropdown panel is open: 'cat' (หมวด), 'menu' (เมนู) or none —
+   *  only ONE panel is ever open at a time. */
+  const [ddOpen, setDdOpen] = useState<'cat' | 'menu' | null>(null)
   const [cartOpen, setCartOpen] = useState(false)
   const [payFor, setPayFor] = useState<Order | null>(null)
   const [payResult, setPayResult] = useState<PayResult | null>(null)
@@ -719,12 +743,18 @@ export default function Counter({
     [menu, type],
   )
 
-  /** หมวด tabs (top row) and the menu tabs of the selected หมวด (second row). */
+  /** หมวด list and the menus of the selected หมวด (the two dropdowns). */
   const categories = useMemo(() => Array.from(new Set(items.map(catOf))), [items])
   const activeCat = type ? catOf(type) : ''
   const itemsInCat = useMemo(() => items.filter((i) => catOf(i) === activeCat), [items, activeCat])
-  // a หมวด that is just one menu with the same name needs no second row
+  // a หมวด that is just one menu with the same name needs no second dropdown
   const showMenuRow = !(itemsInCat.length === 1 && itemsInCat[0].name.trim() === activeCat)
+  /** menus per หมวด — the right-hand meta of the หมวด dropdown rows */
+  const catCounts = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const it of items) m[catOf(it)] = (m[catOf(it)] ?? 0) + 1
+    return m
+  }, [items])
 
   const quick = !!type && !!menu && isQuickType(menu, type)
   const quickTypeOf = useMemo(() => {
@@ -741,6 +771,16 @@ export default function Counter({
   useEffect(() => {
     setPicks([])
   }, [type?.id])
+
+  // Escape closes the open หมวด/เมนู dropdown (backdrop taps do the same)
+  useEffect(() => {
+    if (ddOpen === null) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDdOpen(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [ddOpen])
 
   const priced = useMemo(
     () => (type && menu ? priceLine(menu, type, activeChannel, picks) : null),
@@ -913,6 +953,14 @@ export default function Counter({
     const inCat = items.filter((i) => catOf(i) === cat)
     const pick = inCat.find((i) => !i.sold_out && !i.stock_out) ?? inCat[0]
     if (pick) tapType(pick)
+  }
+
+  /** Dropdown pick of a หมวด: same logic as tapCategory, then close the หมวด
+   *  panel and — when the หมวด holds more than one menu — open the เมนู
+   *  panel straight away (saves the extra tap). */
+  function pickCategoryDd(cat: string) {
+    tapCategory(cat)
+    setDdOpen((catCounts[cat] ?? 0) > 1 ? 'menu' : null)
   }
 
   function tapType(item: MenuItem) {
@@ -1632,38 +1680,132 @@ export default function Counter({
           </>
         )}
 
-        {categories.length > 0 ? (
-          <div className="pos-types pos-cats" aria-label="หมวดเมนู">
-            {categories.map((c) => (
-              <button
-                type="button"
-                key={c}
-                className={`pos-type${activeCat === c ? ' on' : ''}`}
-                onClick={() => tapCategory(c)}
-              >
-                {c}
-              </button>
-            ))}
+        {/* หมวด + เมนู: two stacked full-width dropdowns (was two tab rows) */}
+        {categories.length > 0 || showMenuRow ? (
+          <div className="pos-dd-picker">
+            {ddOpen !== null ? (
+              <div
+                className="pos-dd-backdrop"
+                aria-hidden="true"
+                onClick={() => setDdOpen(null)}
+              />
+            ) : null}
+            {categories.length > 0 ? (
+              <div className="pos-dd-wrap">
+                <button
+                  type="button"
+                  className={`pos-dd-btn${ddOpen === 'cat' ? ' open' : ''}`}
+                  aria-haspopup="listbox"
+                  aria-expanded={ddOpen === 'cat'}
+                  onClick={() => setDdOpen(ddOpen === 'cat' ? null : 'cat')}
+                >
+                  <span className="pos-dd-txt">
+                    <small>หมวด</small>
+                    {activeCat ? <b>{activeCat}</b> : <b className="pos-dd-empty">เลือกหมวด</b>}
+                  </span>
+                  <span className="pos-dd-caret" aria-hidden="true">
+                    {CARET_ICON}
+                  </span>
+                </button>
+                {ddOpen === 'cat' ? (
+                  <div className="pos-dd-panel" role="listbox" aria-label="เลือกหมวด">
+                    <div className="pos-dd-head">
+                      <span>เลือกหมวด</span>
+                      <span>{categories.length} หมวด</span>
+                    </div>
+                    <div className="pos-dd-opts">
+                      {categories.map((c) => (
+                        <button
+                          type="button"
+                          key={c}
+                          role="option"
+                          aria-selected={activeCat === c}
+                          className={`pos-dd-opt${activeCat === c ? ' on' : ''}`}
+                          onClick={() => pickCategoryDd(c)}
+                        >
+                          {TICK_ICON}
+                          <span className="pos-dd-name">{c}</span>
+                          <small className="pos-dd-meta">{catCounts[c] ?? 0} เมนู</small>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {showMenuRow ? (
+              <div className="pos-dd-wrap">
+                <button
+                  type="button"
+                  className={`pos-dd-btn${ddOpen === 'menu' ? ' open' : ''}`}
+                  aria-haspopup="listbox"
+                  aria-expanded={ddOpen === 'menu'}
+                  onClick={() => setDdOpen(ddOpen === 'menu' ? null : 'menu')}
+                >
+                  <span className="pos-dd-txt">
+                    <small>
+                      เมนู ·{' '}
+                      {type ? (
+                        type.sold_out || type.stock_out ? (
+                          <span className="pos-dd-status">
+                            {type.sold_out ? 'ของหมด' : 'วัตถุดิบหมด'}
+                          </span>
+                        ) : (
+                          baht(type.base_price)
+                        )
+                      ) : null}
+                    </small>
+                    {type ? (
+                      <b className={type.sold_out || type.stock_out ? 'soldout' : undefined}>
+                        {type.name}
+                      </b>
+                    ) : (
+                      <b className="pos-dd-empty">เลือกเมนู</b>
+                    )}
+                  </span>
+                  <span className="pos-dd-caret" aria-hidden="true">
+                    {CARET_ICON}
+                  </span>
+                </button>
+                {ddOpen === 'menu' ? (
+                  <div className="pos-dd-panel" role="listbox" aria-label="เลือกเมนู">
+                    <div className="pos-dd-head">
+                      <span>{activeCat}</span>
+                      <span>{itemsInCat.length} เมนู</span>
+                    </div>
+                    <div className="pos-dd-opts">
+                      {itemsInCat.map((it) => (
+                        <LongPressButton
+                          key={it.id}
+                          role="option"
+                          ariaSelected={type?.id === it.id}
+                          className={`pos-dd-opt${type?.id === it.id ? ' on' : ''}${
+                            it.sold_out || it.stock_out ? ' soldout' : ''
+                          }`}
+                          onLong={() => void toggleItemSoldOut(it)}
+                          onTap={() => {
+                            tapType(it)
+                            setDdOpen(null)
+                          }}
+                        >
+                          {TICK_ICON}
+                          <span className="pos-dd-name">{it.name}</span>
+                          {it.sold_out || it.stock_out ? (
+                            <small className="pos-dd-meta bad">
+                              {it.sold_out ? 'ของหมด' : 'วัตถุดิบหมด'}
+                            </small>
+                          ) : (
+                            <small className="pos-dd-meta">{baht(it.base_price)}</small>
+                          )}
+                        </LongPressButton>
+                      ))}
+                    </div>
+                    <p className="pos-dd-foot">กดค้างที่เมนูเพื่อตั้ง/ยกเลิก ของหมด</p>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
-        ) : null}
-        {showMenuRow ? (
-        <div className="pos-types" aria-label="ประเภทเมนู">
-          {itemsInCat.map((it) => (
-            <LongPressButton
-              key={it.id}
-              className={`pos-type${type?.id === it.id ? ' on' : ''}${it.sold_out || it.stock_out ? ' soldout' : ''}`}
-              onLong={() => void toggleItemSoldOut(it)}
-              onTap={() => tapType(it)}
-            >
-              {it.name}
-              {it.sold_out ? (
-                <span className="pos-type-sub">ของหมด</span>
-              ) : it.stock_out ? (
-                <span className="pos-type-sub">วัตถุดิบหมด</span>
-              ) : null}
-            </LongPressButton>
-          ))}
-        </div>
         ) : null}
         {items.length === 0 ? (
           <p className="muted center-text">ยังไม่มีเมนู — รอเจ้าของร้านเพิ่มเมนูก่อน</p>

@@ -815,8 +815,8 @@ body:has(.owner[data-theme="dark"]) { background: #0f1012; }
    (the root element of PosApp), so the legacy green tokens above stay
    untouched. Same token names and values as the `.owner` scope: a warm
    orange accent on neutral surfaces, light + dark.
-   Look: segmented channel pills, big scrollable text tabs for the types,
-   product CARDS in a grid, and on >= 900px a docked "ออเดอร์" panel.
+   Look: segmented channel pills, stacked หมวด/เมนู dropdowns, product CARDS
+   in a grid, and on >= 900px a docked "ออเดอร์" panel.
    ========================================================================== */
 
 .pos {
@@ -1025,25 +1025,92 @@ body:has(.pos[data-theme="dark"]) { background: #0f1012; }
 .pos .pos-seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .pos[data-theme="dark"] .pos-seg button.on { color: #241403; }
 
-/* ---- types: horizontally scrollable BIG text tabs, no boxes ---- */
-.pos .pos-types {
-  display: flex; gap: 2px; align-items: stretch;
-  margin: 0 -16px; padding: 0 16px;
-  overflow-x: auto; overflow-y: hidden; overscroll-behavior: contain;
-  touch-action: pan-x; /* horizontal drag only: no vertical wobble */
-  -webkit-overflow-scrolling: touch; scrollbar-width: none;
-  border-bottom: 1px solid var(--border);
+/* ---- หมวด + เมนู: two stacked full-width dropdowns ---- */
+.pos .pos-dd-picker { display: flex; flex-direction: column; gap: 8px; }
+/* each trigger owns its positioning wrapper, so the panel lands under IT */
+.pos .pos-dd-wrap { position: relative; }
+.pos .pos-dd-btn {
+  width: 100%; min-height: 64px; padding: 8px 10px 8px 14px;
+  display: flex; align-items: center; gap: 8px; text-align: left;
+  border: 1px solid var(--border); border-radius: 14px;
+  background: var(--surface); color: var(--text);
+  box-shadow: var(--shadow);
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.pos .pos-types::-webkit-scrollbar { display: none; }
-.pos .pos-type {
-  flex: none; min-height: 50px; padding: 4px 12px 6px;
-  display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 0;
-  background: transparent; border: 0; border-bottom: 3px solid transparent; border-radius: 0;
-  color: var(--muted); font-size: 21px; font-weight: 700; line-height: 1.2; white-space: nowrap;
+.pos .pos-dd-btn.open { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.pos .pos-dd-txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.pos .pos-dd-txt small {
+  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em; color: var(--muted);
 }
-.pos .pos-type.on { color: var(--text); border-bottom-color: var(--accent); }
-.pos .pos-type.soldout { opacity: 0.45; }
-.pos .pos-type-sub { font-size: 0.68rem; font-weight: 700; line-height: 1.2; }
+.pos .pos-dd-txt b {
+  font-size: 1.2rem; line-height: 1.25;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pos .pos-dd-txt b.soldout { color: var(--muted); }
+.pos .pos-dd-txt b.pos-dd-empty { color: var(--muted); font-weight: 600; }
+.pos .pos-dd-status { color: var(--danger); }
+.pos .pos-dd-caret {
+  flex: none; width: 28px; height: 28px;
+  display: grid; place-items: center; border-radius: 8px;
+  background: var(--surface-2); color: var(--muted);
+  transition: transform 0.18s;
+}
+.pos .pos-dd-btn.open .pos-dd-caret {
+  transform: rotate(180deg); background: var(--accent-soft); color: var(--accent);
+}
+/* semi-transparent sheet that closes the panel on an outside tap; it sits
+   above the pinned bottom bar (20) but below the sticky top bar (30) and
+   below the panel itself (25) — sheets/modals stay far above (40+) */
+.pos .pos-dd-backdrop { position: fixed; inset: 0; z-index: 24; background: rgba(0, 0, 0, 0.18); }
+.pos .pos-dd-panel {
+  position: absolute; left: 0; right: 0; top: calc(100% + 8px); z-index: 25;
+  max-height: min(60vh, 440px); overflow-y: auto; overscroll-behavior: contain;
+  padding: 8px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16); /* same popover shadow as .pos-topmenu-panel */
+  transform-origin: top center; animation: pos-dd-pop 0.14s ease-out;
+}
+@keyframes pos-dd-pop {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.pos .pos-dd-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  padding: 4px 8px 8px; font-size: 0.78rem; font-weight: 700; color: var(--muted);
+}
+/* the options are a VERTICAL list of full-width rows, not cards */
+.pos .pos-dd-opts { display: flex; flex-direction: column; }
+.pos .pos-dd-opt {
+  width: 100%; min-height: 54px; padding: 8px 12px;
+  display: flex; align-items: center; gap: 10px; text-align: left;
+  border: 0; border-radius: 10px; background: transparent; color: var(--text);
+  font-size: 1.1rem; font-weight: 700; line-height: 1.25;
+  user-select: none; -webkit-user-select: none; touch-action: manipulation;
+}
+.pos .pos-dd-opt + .pos-dd-opt { box-shadow: 0 -1px 0 var(--border); } /* 1px divider */
+.pos .pos-dd-opt.on,
+.pos .pos-dd-opt.on + .pos-dd-opt { box-shadow: none; }
+.pos .pos-dd-opt:active { background: var(--surface-2); }
+.pos .pos-dd-opt.on { background: var(--accent-soft); color: var(--accent-strong); }
+.pos .pos-dd-opt.on .pos-dd-meta { color: var(--accent-strong); }
+.pos .pos-dd-opt.soldout { opacity: 0.5; }
+.pos .pos-dd-name {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pos .pos-dd-meta {
+  flex: none; font-size: 0.85rem; font-weight: 600; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+/* "ของหมด"/"วัตถุดิบหมด" keeps its danger colour inside a dimmed row */
+.pos .pos-dd-meta.bad { color: var(--danger); }
+.pos .pos-dd-tick { flex: none; width: 18px; height: 18px; color: var(--accent); visibility: hidden; }
+.pos .pos-dd-opt.on .pos-dd-tick { visibility: visible; }
+.pos .pos-dd-foot { margin: 0; padding: 8px 8px 2px; font-size: 0.75rem; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) {
+  .pos .pos-dd-btn, .pos .pos-dd-caret { transition: none; }
+  .pos .pos-dd-panel { animation: none; }
+}
 
 /* ---- group title: small + muted (the hint text keeps its own colour) ---- */
 .pos .pos-group-title { font-size: 0.82rem; font-weight: 700; color: var(--muted); }
@@ -1741,10 +1808,7 @@ body:has(.join) { background: #f6f6f7; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* ---- sell screen: หมวด row above the menu tabs; bigger orange names ---- */
-.pos .pos-cats { margin-bottom: 0; }
-.pos .pos-cats .pos-type { color: var(--accent); font-size: 22px; opacity: 0.7; }
-.pos .pos-cats .pos-type.on { color: var(--accent); opacity: 1; border-bottom-color: var(--accent); }
+/* ---- sell screen: bigger orange group titles + choice names ---- */
 .pos .pos-group-title { font-size: 1.05rem; font-weight: 800; color: var(--accent); }
 .pos .pos-choice-name { font-size: 1.2rem; font-weight: 800; line-height: 1.25; }
 
@@ -1843,3 +1907,49 @@ body:has(.join) { background: #f6f6f7; }
   border: 0; background: transparent; color: var(--muted); font-size: 1rem;
 }
 @media (prefers-reduced-motion: reduce) { .pos .pos-upgate-fill { transition: none; } }
+
+/* ==========================================================================
+   OWNER menu editor — whole-ประเภท "template" sheet (TypeTemplateSheet in
+   owner/MenuEditor.tsx: "+ จาก template" / "ทำซ้ำ"). Append-only block: the
+   sheet reuses .sheet / .group-block / label.check / .tpl-opt as they are, so
+   only the few new bits live here. Scoped to .owner/.menu-editor, layout only
+   (colours come from the theme tokens).
+   ========================================================================== */
+
+/* the mini "ทำซ้ำ" button of a ประเภท card: icon + text on one 44px target */
+.owner .menu-editor .tpl-dup {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  padding: 4px 10px;
+  font-size: 0.86rem;
+}
+
+/* หมวด + ราคาตั้งต้น side by side, one column on a narrow phone */
+.owner .menu-editor .tpl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+/* "หัวข้อที่จะคัดลอก" + its count on one baseline */
+.owner .menu-editor .tpl-sec {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* the live preview line at the foot of the sheet: accent box */
+.owner .menu-editor .tpl-summary {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 700;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
