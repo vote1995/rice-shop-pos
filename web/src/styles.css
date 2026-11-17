@@ -1112,6 +1112,26 @@ body:has(.pos[data-theme="dark"]) { background: #0f1012; }
   .pos .pos-dd-panel { animation: none; }
 }
 
+/* ---- dropdown colours: หมวด reads GREEN, เมนู reads ORANGE ----
+   The .pos scope redefines --green to the orange accent, so the category
+   green is spelled out per theme (#2e7d32 light / #66bb6a dark). The empty
+   placeholder and sold-out triggers keep the muted colour, sold-out rows
+   keep their dimmed look with muted names. */
+.pos .pos-dd-cat .pos-dd-txt b:not(.soldout):not(.pos-dd-empty) {
+  font-size: 1.4rem; /* one step up from the 1.2rem shared trigger size */
+  color: #2e7d32;
+}
+.pos .pos-dd-cat .pos-dd-name {
+  font-size: 1.3rem; /* .pos-dd-opt's 1.1rem + 0.2rem */
+  color: #2e7d32;
+}
+.pos[data-theme="dark"] .pos-dd-cat .pos-dd-txt b:not(.soldout):not(.pos-dd-empty) { color: #66bb6a; }
+.pos[data-theme="dark"] .pos-dd-cat .pos-dd-name { color: #66bb6a; }
+.pos .pos-dd-menu .pos-dd-txt b:not(.soldout):not(.pos-dd-empty) { color: var(--accent); }
+.pos .pos-dd-menu .pos-dd-name { color: var(--accent); }
+/* names inside sold-out rows stay muted in both dropdowns */
+.pos .pos-dd-opt.soldout .pos-dd-name { color: var(--muted); }
+
 /* ---- group title: small + muted (the hint text keeps its own colour) ---- */
 .pos .pos-group-title { font-size: 0.82rem; font-weight: 700; color: var(--muted); }
 

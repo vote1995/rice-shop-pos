@@ -494,8 +494,6 @@ export interface MenuItem {
   cost: number | null
   image_key: string | null
   sold_out: boolean
-  /** derived (0010): an auto_block ingredient behind this item ran out */
-  stock_out?: boolean
   status: 'active' | 'inactive'
   sort_order: number
   created_at: string | null
@@ -520,8 +518,6 @@ export interface MenuOption {
   name: string
   price_add: number
   sold_out: boolean
-  /** derived (0010): an auto_block ingredient behind this option ran out */
-  stock_out?: boolean
   sort_order: number
 }
 
@@ -573,10 +569,6 @@ export interface Ingredient {
   /** approximate remaining amount = last count − sold (recipe × plates) */
   qty: number
   alert_level: number
-  /** 0010: block the menu when the estimate runs out (server: 0/1) */
-  auto_block: boolean
-  /** 0010: units that may still go out below 0 (qty + reserve is sellable) */
-  reserve: number
   status: 'active' | 'inactive'
   sort_order: number
   created_at: string | null

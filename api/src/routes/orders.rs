@@ -330,9 +330,6 @@ struct ShopPricing {
     items: HashMap<String, MenuItem>,
     groups: Vec<PricingGroup>,
     markup: Value,
-    /// Which items / options are short of an auto_block ingredient (0010),
-    /// so every line of the bill is priced against the same snapshot.
-    stock_out: stock::StockOut,
 }
 
 // ---------------------------------------------------------------------------
@@ -454,9 +451,8 @@ fn placeholders(from: usize, n: usize) -> String {
 }
 
 /// `MenuItem` row -> [`PricingItem`] (field for field; pricing never sees
-/// shop_id, category or cost). `out` is the shop's derived stock state
-/// (migration 0010), loaded once per bill by [`load_shop_pricing`].
-fn pricing_item(item: &MenuItem, out: &stock::StockOut) -> PricingItem {
+/// shop_id, category or cost).
+fn pricing_item(item: &MenuItem) -> PricingItem {
     PricingItem {
         id: item.id.clone(),
         name: item.name.clone(),
@@ -469,20 +465,14 @@ fn pricing_item(item: &MenuItem, out: &stock::StockOut) -> PricingItem {
         foodpanda_price: item.foodpanda_price,
         status: item.status.clone(),
         sold_out: item.sold_out,
-        stock_out: out.is_item_out(&item.id),
     }
 }
 
 /// The shop's option groups + options -> the flat [`PricingGroup`] list that
 /// [`crate::pricing::price_line`] filters per item. Options only ever land in
 /// their own group; a group without options still applies (a required group
-/// with no pick is rejected by pricing). `out` is the shop's derived stock
-/// state (migration 0010), loaded once per bill.
-fn pricing_groups(
-    groups: &[OptionGroup],
-    options: &[MenuOption],
-    out: &stock::StockOut,
-) -> Vec<PricingGroup> {
+/// with no pick is rejected by pricing).
+fn pricing_groups(groups: &[OptionGroup], options: &[MenuOption]) -> Vec<PricingGroup> {
     let mut by_group: HashMap<&str, Vec<PricingOption>> = HashMap::new();
     for option in options {
         by_group
@@ -493,7 +483,6 @@ fn pricing_groups(
                 name: option.name.clone(),
                 price_add: option.price_add,
                 sold_out: option.sold_out,
-                stock_out: out.is_option_out(&option.id),
             });
     }
     groups
@@ -701,15 +690,13 @@ async fn load_shop_pricing(
         ApiError::Internal(format!("shop {shop_id} has invalid channel_markup_json: {e}"))
     })?;
 
-    // The derived stock state of the shop, once per bill (recipe + blockers,
-    // two reads in load_stock_out) - never a query per item or option.
-    let stock_out = stock::load_stock_out(env, shop_id).await?;
+    // The derived stock state is deliberately NOT loaded: stock never gates a
+    // sale (only the manual sold_out flag does), it is just deducted.
 
     Ok(ShopPricing {
         items: items.into_iter().map(|item| (item.id.clone(), item)).collect(),
-        groups: pricing_groups(&option_groups, &options, &stock_out),
+        groups: pricing_groups(&option_groups, &options),
         markup,
-        stock_out,
     })
 }
 
@@ -731,7 +718,7 @@ fn price_lines(
             )));
         };
         let unit = price_line(
-            &pricing_item(item, &menu.stock_out),
+            &pricing_item(item),
             &menu.groups,
             channel,
             &menu.markup,
@@ -820,14 +807,9 @@ fn line_insert(
 
 /// The ingredient deduction for these lines (recipe x quantity), as batch
 /// statements guarded by the first line's insert (see [`stock::sale_statements`]).
-/// Empty when the shop keeps no recipe for anything sold here.
-///
-/// Before anything is written, the bill's TOTAL need per ingredient is checked
-/// against the shop's auto_block ingredients ([`stock::check_total_need`]):
-/// one plate each can fit while the whole bill does not, and a bill that
-/// overshoots `qty + reserve` is refused with a BadRequest - so nothing is
-/// inserted and nothing deducted. Shops without a single auto_block ingredient
-/// have no blockers and therefore keep selling exactly as before.
+/// Empty when the shop keeps no recipe for anything sold here. Stock NEVER
+/// blocks the sale: the deduction simply drives the stock estimate, and it can
+/// take `qty` below zero (the owner's count puts it right again).
 async fn stock_deduction(
     env: &Env,
     shop_id: &str,
@@ -847,8 +829,6 @@ async fn stock_deduction(
     if usage.is_empty() {
         return Ok(Vec::new());
     }
-    let blockers = stock::load_blockers(env, shop_id).await?;
-    stock::check_total_need(&usage, &blockers)?;
     stock::sale_statements(env, shop_id, order_id, user_id, &first.id, &usage, now)
 }
 
@@ -1759,7 +1739,6 @@ mod tests {
                 menu_option("op-item", "g-item", 1000),
                 menu_option("op-orphan", "g-missing", 2000),
             ],
-            &stock::StockOut::default(),
         );
         assert_eq!(groups.len(), 2);
         // Shop-wide group keeps menu_item_id NULL (pricing applies it to every
@@ -1799,7 +1778,7 @@ mod tests {
             updated_at: 0,
         };
         assert_eq!(
-            pricing_item(&item, &stock::StockOut::default()),
+            pricing_item(&item),
             PricingItem {
                 id: "menu-1".to_owned(),
                 name: "rice with curry".to_owned(),
@@ -1812,18 +1791,13 @@ mod tests {
                 foodpanda_price: None,
                 status: "active".to_owned(),
                 sold_out: true,
-                stock_out: false,
             }
         );
         // End to end: the mapped shapes drive the real pricing engine.
-        let groups = pricing_groups(
-            &[option_group("g", None)],
-            &[menu_option("op", "g", 1000)],
-            &stock::StockOut::default(),
-        );
+        let groups = pricing_groups(&[option_group("g", None)], &[menu_option("op", "g", 1000)]);
         // Sold out items are rejected before the picks are even looked at.
         assert!(bad(price_line(
-            &pricing_item(&item, &stock::StockOut::default()),
+            &pricing_item(&item),
             &groups,
             "counter",
             &serde_json::json!({}),
@@ -1832,9 +1806,14 @@ mod tests {
         .contains("not available"));
         let mut sellable = item.clone();
         sellable.sold_out = false;
-        let priced_ok =
-            price_line(&pricing_item(&sellable, &stock::StockOut::default()), &groups, "counter", &serde_json::json!({}), &["op".to_owned()])
-                .unwrap();
+        let priced_ok = price_line(
+            &pricing_item(&sellable),
+            &groups,
+            "counter",
+            &serde_json::json!({}),
+            &["op".to_owned()],
+        )
+        .unwrap();
         assert_eq!(priced_ok.unit_price, 5000 + 1000);
         assert_eq!(priced_ok.options.len(), 1);
     }

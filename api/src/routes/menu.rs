@@ -28,9 +28,7 @@ use serde_json::{json, Value};
 
 use crate::auth::staff::StaffAuth;
 use crate::extract::ApiJson;
-use crate::routes::owner::menu::{
-    load_menu_item, load_option, menu_stock_out_json, MenuItem, MenuOption, OptionGroup,
-};
+use crate::routes::owner::menu::{load_menu_item, load_option, MenuItem, MenuOption, OptionGroup};
 use crate::util::{body_etag, if_none_match_matches, int, now_ms, parse_uuid, txt};
 use crate::{db, error::ApiError, AppState};
 
@@ -45,8 +43,8 @@ const GROUP_COLUMNS: &str = "id, shop_id, menu_item_id, name, required, max_sele
 const OPTION_COLUMNS: &str = "id, shop_id, option_group_id, name, price_add, sold_out, \
      sort_order, created_at, updated_at";
 
-/// The menu is per-session and changes with every sold-out toggle / stock dip,
-/// so the POS may keep a copy but has to revalidate it against the ETag every
+/// The menu is per-session and changes with every sold-out toggle, so the POS
+/// may keep a copy but has to revalidate it against the ETag every
 /// time. `private` keeps it out of shared caches; `no-cache` forces the
 /// revalidation round-trip (it means "must revalidate", not "do not store").
 const MENU_CACHE_CONTROL: &str = "private, no-cache";
@@ -90,8 +88,8 @@ pub struct SoldOutBody {
 /// `If-None-Match`: a 304 therefore still costs the same auth + queries (so
 /// revalidation can never hand a menu to an unauthenticated caller) and the
 /// ETag is a SHA-256 over the very bytes a 200 would have sent - anything that
-/// feeds the JSON (items, options, sold-out flags, channel markup, the derived
-/// stock-out flags from ingredient levels) is covered automatically.
+/// feeds the JSON (items, options, sold-out flags, channel markup) is covered
+/// automatically.
 #[worker::send]
 pub async fn staff_menu(
     State(state): State<AppState>,
@@ -146,11 +144,6 @@ pub async fn staff_menu(
         .all()
         .await?
         .results::<MenuOption>()?;
-
-    // stock_out is derived per row (auto-block): the counter dims it next to
-    // the manual sold_out flag. One read for the whole shop.
-    let (items, options) =
-        menu_stock_out_json(env, &shop_id, items, options).await?;
 
     let body = json!({
         "items": items,
@@ -296,7 +289,7 @@ mod tests {
         let etag = body_etag(body);
         // The tag we hand out revalidates against the tag we would recompute.
         assert!(if_none_match_matches(&etag, &body_etag(body)));
-        // Any byte of menu drift (a sold-out flip, a price, a stock dip) is a
+        // Any byte of menu drift (a sold-out flip, a price) is a
         // new representation, so the old tag no longer matches.
         assert!(!if_none_match_matches(
             &etag,
