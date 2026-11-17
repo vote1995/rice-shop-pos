@@ -153,6 +153,14 @@ const PRICE_INPUT: CSSProperties = { width: 72, flex: '0 0 72px', minWidth: 0, t
 const MODE_BTN: CSSProperties = { flex: 'none', fontSize: '0.85rem', padding: '4px 10px', minHeight: 44 }
 const X_BTN: CSSProperties = { flex: 'none', minWidth: 44, padding: '4px 10px', minHeight: 44 }
 
+/** 15px "duplicate" glyph of the ทำซ้ำ button (aria-hidden: the text is beside it). */
+const COPY_ICON = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+    <rect x="9" y="9" width="11" height="11" rx="2" />
+    <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+  </svg>
+)
+
 export default function MenuEditor() {
   const { shopId } = useOwnerShop()
   const [data, setData] = useState<MenuData | null>(null)
@@ -167,6 +175,9 @@ export default function MenuEditor() {
   const [imgErr, setImgErr] = useState('')
   // "template" copy sheet (open only while one item is being edited)
   const [tplOpen, setTplOpen] = useState(false)
+  // whole-ประเภท "template" sheet (list view): null = closed, '' = no source
+  // preselected, otherwise the id of the ประเภท whose "ทำซ้ำ" was tapped
+  const [dupFrom, setDupFrom] = useState<string | null>(null)
   const saveTimer = useRef<number | null>(null)
 
   const load = useCallback(async () => {
@@ -198,6 +209,7 @@ export default function MenuEditor() {
   // items/shops must close it, or it would pop open on the next item
   useEffect(() => {
     setTplOpen(false)
+    setDupFrom(null)
   }, [editId, shopId])
 
   // markup card follows the freshly loaded data (also re-syncs after save)
@@ -430,6 +442,14 @@ export default function MenuEditor() {
     setTplOpen(false)
     if (focusFirst !== null) setFocusOptId(focusFirst)
     flash('คัดลอกหัวข้อแล้ว')
+  }
+
+  /** A whole-ประเภท template landed: close the sheet, flash what was made,
+   *  and (สร้างแล้วแก้ไข) jump straight into the new item's editor. */
+  function typeTemplateApplied(newId: string | null, name: string, open: boolean) {
+    setDupFrom(null)
+    flash(`สร้าง ${name} แล้ว (${open ? 'เปิดขาย' : 'ปิดขายอยู่'})`)
+    if (newId !== null) setEditId(newId)
   }
 
   // Never-sold types are deleted for real; ones on old bills are hidden
@@ -796,6 +816,12 @@ export default function MenuEditor() {
 
       <div className="row">
         <h2 className="grow">เมนู (ประเภท) {items.length}</h2>
+        {/* flash() messages of the list view, e.g. "สร้าง … แล้ว" from the template sheet */}
+        {saveState ? (
+          <span className={`${saveState.bad ? 'error' : 'muted'} small`} role="status">
+            {saveState.text}
+          </span>
+        ) : null}
         <button className="btn ghost" disabled={busy || !shopId} onClick={() => void load()}>
           รีเฟรช
         </button>
@@ -836,6 +862,17 @@ export default function MenuEditor() {
                   {it.status === 'active' ? 'เปิดขาย' : 'ปิดขาย'}
                 </span>
                 <span className="grow" />
+                <button
+                  type="button"
+                  className="btn ghost tpl-dup"
+                  title="สร้างประเภทใหม่จากประเภทนี้ทั้งชุด (ราคา หัวข้อ ตัวเลือก)"
+                  aria-label={`ทำซ้ำประเภท ${it.name}`}
+                  disabled={busy || !shopId}
+                  onClick={() => setDupFrom(it.id)}
+                >
+                  {COPY_ICON}
+                  ทำซ้ำ
+                </button>
                 <Switch
                   checked={it.status === 'active'}
                   label={`${it.status === 'active' ? 'ปิดขาย' : 'เปิดขาย'} ${it.name}`}
@@ -850,9 +887,21 @@ export default function MenuEditor() {
       ))}
       {data && items.length === 0 ? <p className="muted">ยังไม่มีประเภท — กด "+ เพิ่มประเภท" เพื่อเริ่ม</p> : null}
 
-      <button className="btn primary" disabled={busy || !shopId} onClick={() => void addType()}>
-        + เพิ่มประเภท
-      </button>
+      <div className="row">
+        <button className="btn primary grow" disabled={busy || !shopId} onClick={() => void addType()}>
+          + เพิ่มประเภท
+        </button>
+        {items.length > 0 ? (
+          <button
+            className="btn ghost"
+            title="สร้างประเภทใหม่จากประเภทที่มีอยู่ทั้งชุด (ราคา หัวข้อ ตัวเลือก)"
+            disabled={busy || !shopId}
+            onClick={() => setDupFrom('')}
+          >
+            + จาก template
+          </button>
+        ) : null}
+      </div>
 
       {sharedLists.length > 0 ? (
         <section className="card">
@@ -910,6 +959,21 @@ export default function MenuEditor() {
           </button>
         </div>
       </section>
+
+      {dupFrom !== null && data && shopId ? (
+        <TypeTemplateSheet
+          shopId={shopId}
+          menu={data}
+          byCat={catGroups}
+          categories={categories}
+          preselect={dupFrom}
+          onClose={() => setDupFrom(null)}
+          onItem={upsertItem}
+          onGroup={upsertGroup}
+          onOption={upsertOption}
+          onApplied={typeTemplateApplied}
+        />
+      ) : null}
     </section>
   )
 }
@@ -1090,6 +1154,359 @@ function TemplateSheet({
             ปิด
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// "template" sheet (whole ประเภท): duplicate ONE menu item together with its
+// หัวข้อ and ตัวเลือก — the "+ จาก template" button / "ทำซ้ำ" of the list
+// view. Same deep-copy rule as TemplateSheet above: every row is POSTed fresh
+// with a new id (the NEW item's menu_item_id for the groups), so the source
+// item is never shared, moved or modified. Tier-pricing groups are never
+// offered.
+// ---------------------------------------------------------------------------
+
+/** POST /api/owner/menu-items takes no image_key (CreateMenuItemBody), so the
+ *  "คัดลอกรูปเมนู" box can only appear once the API grows a way to copy one. */
+const CREATE_ACCEPTS_IMAGE_KEY = false
+
+function TypeTemplateSheet({
+  shopId,
+  menu,
+  byCat,
+  categories,
+  preselect,
+  onClose,
+  onItem,
+  onGroup,
+  onOption,
+  onApplied,
+}: {
+  shopId: string
+  /** the whole shop menu: the sources, their หัวข้อ/ตัวเลือก and the dup check */
+  menu: MenuData
+  /** the list view's หมวด blocks — they group the source <select> */
+  byCat: { label: string; items: MenuItem[] }[]
+  /** หมวด names for the datalist (same suggestions the editor gives) */
+  categories: string[]
+  /** item id to open on ('' = the first ประเภท in menu order) */
+  preselect: string
+  onClose: () => void
+  /** patch helpers of the editor (upsertItem / upsertGroup / upsertOption) */
+  onItem: (it: MenuItem) => void
+  onGroup: (g: OptionGroup) => void
+  onOption: (o: MenuOption) => void
+  /** create finished: non-null = open the new item's editor ("สร้างแล้วแก้ไข") */
+  onApplied: (newId: string | null, name: string, open: boolean) => void
+}) {
+  // source the sheet opens on: the ประเภท whose "ทำซ้ำ" was tapped, else the first
+  const firstSrc: MenuItem | undefined = menu.items.find((i) => i.id === preselect) ?? (menu.items.length > 0 ? menu.items[0] : undefined)
+  const [srcId, setSrcId] = useState(firstSrc ? firstSrc.id : '')
+  const [name, setName] = useState(firstSrc ? `${firstSrc.name} (สำเนา)` : '')
+  const [cat, setCat] = useState(firstSrc ? chosenCat(firstSrc) : '')
+  const [price, setPrice] = useState(firstSrc ? fmtBaht(firstSrc.base_price) : '0')
+  /** group ids whose checkbox is unticked (default: everything gets copied) */
+  const [skip, setSkip] = useState<Record<string, boolean>>({})
+  const [copyImage, setCopyImage] = useState(false)
+  const [openNow, setOpenNow] = useState(false)
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  // Row ids made ONCE per sheet open (same trick as TemplateSheet / the stock
+  // move_id): a retry after a network error replays them, so the idempotent
+  // POSTs never duplicate the rows that already made it.
+  const newItemId = useRef(crypto.randomUUID())
+  const planIds = useRef(new Map<string, { group: string; options: string[] }>())
+  const nameRef = useRef<HTMLInputElement | null>(null)
+
+  const listsOfSrc = (id: string) => menu.option_groups.filter((g) => g.menu_item_id === id && !g.tier_pricing)
+  const src = menu.items.find((i) => i.id === srcId)
+  const groups = src ? listsOfSrc(src.id) : []
+  const checked = groups.filter((g) => !skip[g.id])
+  const optsOf = (groupId: string) => menu.options.filter((o) => o.option_group_id === groupId)
+
+  // the new name is prefilled, so focus + select it for immediate renaming
+  useEffect(() => {
+    if (nameRef.current) {
+      nameRef.current.focus()
+      nameRef.current.select()
+    }
+  }, [])
+
+  /** A new source resets the whole form from it: name/หมวด/ราคา, every
+   *  หัวข้อ ticked, image copy and เปิดขายทันที back off. */
+  function loadSource(id: string) {
+    const s = menu.items.find((i) => i.id === id)
+    if (!s) return
+    setSrcId(id)
+    setName(`${s.name} (สำเนา)`)
+    setCat(chosenCat(s))
+    setPrice(fmtBaht(s.base_price))
+    setSkip({})
+    setCopyImage(false)
+    setOpenNow(false)
+    setErr('')
+  }
+
+  // ---- live validation (inline, exactly the two rules the list view needs) ----
+  const nameT = name.trim()
+  const catT = cat.trim()
+  /** the หมวด the new item will really get ('' = its own name stands in) */
+  const newCat = catT === '' ? nameT : catT
+  const satang = bahtToSatang(price)
+  const basePrice = typeof satang === 'number' ? satang : 0
+  const nameErr = nameT === '' ? 'กรอกชื่อประเภทก่อน' : ''
+  const priceErr = satang === 'invalid' ? 'ราคาไม่ถูกต้อง' : ''
+  // The row being created is skipped: after a partial failure it is already in
+  // the local state, and the retry must not be blocked by its own name.
+  const dupErr =
+    nameT !== '' &&
+    newCat !== '' &&
+    menu.items.some((i) => i.id !== newItemId.current && catOf(i) === newCat && i.name.trim() === nameT)
+      ? 'มีชื่อนี้ในหมวดแล้ว'
+      : ''
+  const nameBad = nameErr !== '' || dupErr !== ''
+  const optCount = checked.reduce((n, g) => n + optsOf(g.id).length, 0)
+  const blocked = !src || nameBad || priceErr !== ''
+
+  // สร้าง = new item + the ticked groups/options, then close; สร้างแล้วแก้ไข
+  // does the same and leaves the sheet straight into the new item's editor.
+  async function create(thenEdit: boolean) {
+    if (blocked || !src) {
+      nameRef.current?.focus()
+      return
+    }
+    setBusy(true)
+    setErr('')
+    try {
+      // Same body shape as addType, but with the typed name/หมวด/ราคา and the
+      // source's menu_type / tier+channel prices / cost / sort_order (so the
+      // copy sorts right next to the ประเภท it came from).
+      let item = await api<MenuItem>('POST', '/api/owner/menu-items', {
+        id: newItemId.current,
+        shop_id: shopId,
+        name: nameT,
+        category: newCat,
+        menu_type: src.menu_type,
+        base_price: basePrice,
+        price_2: src.price_2,
+        price_3: src.price_3,
+        grab_price: src.grab_price,
+        lineman_price: src.lineman_price,
+        foodpanda_price: src.foodpanda_price,
+        cost: src.cost,
+        sort_order: src.sort_order,
+      })
+      onItem(item)
+      // Create always inserts status 'active' (the body has no status field),
+      // so เปิดขายทันที OFF is applied right after, with the normal PUT.
+      if (!openNow && item.status === 'active') {
+        item = await api<MenuItem>(
+          'PUT',
+          `/api/owner/menu-items/${encodeURIComponent(item.id)}`,
+          itemPutBody(item, { status: 'inactive' }),
+        )
+        onItem(item)
+      }
+      for (const g of checked) {
+        const opts = optsOf(g.id)
+        let ids = planIds.current.get(g.id)
+        if (!ids) {
+          ids = { group: crypto.randomUUID(), options: opts.map(() => crypto.randomUUID()) }
+          planIds.current.set(g.id, ids)
+        }
+        // Same body shape as addList, but with the source's name/policy/order
+        // and the NEW item's menu_item_id.
+        const ng = await api<OptionGroup>('POST', '/api/owner/option-groups', {
+          id: ids.group,
+          shop_id: shopId,
+          menu_item_id: item.id,
+          name: g.name,
+          required: g.required,
+          max_select: g.max_select,
+          tier_pricing: false,
+          sort_order: g.sort_order,
+        })
+        onGroup(ng)
+        for (let i = 0; i < opts.length; i++) {
+          // Same body shape as addOption, with the source's name/price/order.
+          onOption(
+            await api<MenuOption>('POST', '/api/owner/options', {
+              id: ids.options[i],
+              option_group_id: ng.id,
+              name: opts[i].name,
+              price_add: opts[i].price_add,
+              sort_order: opts[i].sort_order,
+            }),
+          )
+        }
+      }
+      onApplied(thenEdit ? item.id : null, item.name, openNow)
+    } catch (e) {
+      setErr(friendlyError(e)) // sheet stays open: creating again replays the same ids
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="sheet-backdrop" onClick={busy ? undefined : onClose}>
+      <div
+        className="sheet"
+        role="dialog"
+        aria-label="template — สร้างประเภทใหม่จากประเภทเดิม"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2>template — สร้างประเภทใหม่จากประเภทเดิม</h2>
+        <p className="muted small">สร้างประเภทใหม่ทั้งชุด (ราคา หัวข้อ ตัวเลือก) จากประเภทที่มีอยู่ — ต้นทางไม่เปลี่ยนแปลง</p>
+        {src ? (
+          <>
+            <label>
+              คัดลอกจากประเภท
+              <select value={srcId} disabled={busy} onChange={(e) => loadSource(e.target.value)}>
+                {byCat.map((cg) => (
+                  <optgroup key={cg.label} label={cg.label}>
+                    {cg.items.map((it) => (
+                      <option key={it.id} value={it.id}>
+                        {it.name} ({listsOfSrc(it.id).length} หัวข้อ · ฿{fmtBaht(it.base_price)})
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+            <label>
+              ชื่อประเภทใหม่
+              <input
+                ref={nameRef}
+                value={name}
+                maxLength={60}
+                autoComplete="off"
+                aria-invalid={nameBad}
+                disabled={busy}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    void create(false)
+                  }
+                }}
+              />
+            </label>
+            {nameBad ? (
+              <p className="error small" role="alert">
+                {nameErr || dupErr}
+              </p>
+            ) : null}
+            <div className="tpl-grid">
+              <label>
+                หมวด
+                <input
+                  value={cat}
+                  list="menu-categories"
+                  placeholder="ไม่เลือก = ใช้ชื่อประเภทเป็นหมวด"
+                  disabled={busy}
+                  onChange={(e) => setCat(e.target.value)}
+                />
+              </label>
+              <label>
+                ราคาตั้งต้น ฿
+                <input
+                  value={price}
+                  inputMode="decimal"
+                  placeholder="0"
+                  aria-invalid={priceErr !== ''}
+                  disabled={busy}
+                  onChange={(e) => setPrice(e.target.value)}
+                />
+              </label>
+            </div>
+            <datalist id="menu-categories">
+              {categories.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
+            {priceErr !== '' ? (
+              <p className="error small" role="alert">
+                {priceErr}
+              </p>
+            ) : null}
+            {src.image_key !== null && CREATE_ACCEPTS_IMAGE_KEY ? (
+              <label className="check">
+                <input type="checkbox" checked={copyImage} disabled={busy} onChange={(e) => setCopyImage(e.target.checked)} />
+                <span style={{ flex: '1 1 auto', minWidth: 0 }}>คัดลอกรูปเมนู</span>
+              </label>
+            ) : null}
+            <label className="check">
+              <input type="checkbox" checked={openNow} disabled={busy} onChange={(e) => setOpenNow(e.target.checked)} />
+              <span style={{ flex: '1 1 auto', minWidth: 0 }}>
+                เปิดขายทันที <span className="muted small">(ปิดไว้ก่อน จนแก้ไขเสร็จ)</span>
+              </span>
+            </label>
+            <h3 className="tpl-sec">
+              หัวข้อที่จะคัดลอก
+              {groups.length > 0 ? <span className="muted small">{groups.length} หัวข้อ</span> : null}
+            </h3>
+            {groups.length === 0 ? (
+              <p className="muted small">ประเภทนี้ยังไม่มีหัวข้อ — ประเภทใหม่จะไม่มีหัวข้อ</p>
+            ) : (
+              groups.map((g) => {
+                const opts = optsOf(g.id)
+                return (
+                  <div className="group-block" key={g.id}>
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={!skip[g.id]}
+                        disabled={busy}
+                        aria-label={`คัดลอกหัวข้อ ${g.name}`}
+                        onChange={() => setSkip({ ...skip, [g.id]: !skip[g.id] })}
+                      />
+                      <span style={{ flex: '1 1 auto', minWidth: 0 }}>
+                        <strong>{g.name}</strong>
+                        <span className="muted small" style={{ display: 'block' }}>
+                          {MODE_LABEL[modeOf(g)]}
+                        </span>
+                      </span>
+                      <span className="badge">{opts.length} ตัวเลือก</span>
+                    </label>
+                    {opts.map((o) => (
+                      <div className="tpl-opt" key={o.id}>
+                        <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{o.name}</span>
+                        <span className="muted small price">+฿{fmtBaht(o.price_add)}</span>
+                      </div>
+                    ))}
+                    {opts.length === 0 ? <p className="muted small">ยังไม่มีตัวเลือกในหัวข้อนี้</p> : null}
+                  </div>
+                )
+              })
+            )}
+            <p className="tpl-summary" aria-live="polite">
+              จะสร้าง: {nameT === '' ? '—' : nameT} · หมวด {newCat === '' ? '—' : newCat} · ฿{fmtBaht(basePrice)} ·{' '}
+              {checked.length} หัวข้อ {optCount} ตัวเลือก
+            </p>
+            {err ? (
+              <p className="error small" role="alert">
+                {err}
+              </p>
+            ) : null}
+            {busy ? <p className="muted small">กำลังสร้าง…</p> : null}
+            <div className="row">
+              <button type="button" className="btn primary grow" disabled={busy || blocked} onClick={() => void create(false)}>
+                สร้าง
+              </button>
+              <button type="button" className="btn ghost" disabled={busy || blocked} onClick={() => void create(true)}>
+                สร้างแล้วแก้ไข
+              </button>
+              <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>
+                ปิด
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className="muted">ยังไม่มีประเภท — สร้างประเภทแรกก่อน แล้วค่อยใช้ template</p>
+        )}
       </div>
     </div>
   )
