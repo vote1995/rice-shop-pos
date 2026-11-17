@@ -363,7 +363,7 @@ export default function StockPanel() {
               <RecipeCard key={it.id} item={it} menu={menu} stock={stock} onOpen={setUsesFor} />
             ))}
             {activeItems.length === 0 ? (
-              <p className="muted">ยังไม่มีประเภทที่เปิดขาย — เพิ่มในแท็บ “เมนู” ก่อน</p>
+              <p className="muted">ยังไม่มีเมนูที่เปิดขาย — เพิ่มในแท็บ “เมนู” ก่อน</p>
             ) : null}
           </div>
         ) : null}
@@ -419,17 +419,6 @@ function StockRow({
         <span className="muted" style={{ fontSize: '0.8rem' }}>
           ใช้ไปวันนี้ {fmt1(row.used_today)} {row.unit}
         </span>
-        {row.auto_block ? (
-          <span style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
-            <span className="badge">ปิดอัตโนมัติ</span>
-            {row.reserve > 0 ? (
-              <span className="badge">
-                สำรอง {fmt1(row.reserve)} {row.unit}
-              </span>
-            ) : null}
-            {row.qty + row.reserve <= 0 ? <span className="badge revoked">หมด – ปิดขายแล้ว</span> : null}
-          </span>
-        ) : null}
       </button>
       <button type="button" className="btn primary" style={ROW_BTN} onClick={onRestock}>
         + เติม
@@ -486,7 +475,7 @@ function RecipeCard({
           </div>
         )
       })}
-      {groups.length === 0 ? <p className="muted small">ยังไม่มีหัวข้อของประเภทนี้</p> : null}
+      {groups.length === 0 ? <p className="muted small">ยังไม่มีหัวข้อของเมนูนี้</p> : null}
     </div>
   )
 }
@@ -724,8 +713,7 @@ function CountSheet({
 }
 
 // ---------------------------------------------------------------------------
-// Edit sheet (tap the name): name / unit / alert level / auto-block + reserve
-// / เปิด-ปิดใช้ -> PUT
+// Edit sheet (tap the name): name / unit / alert level / เปิด-ปิดใช้ -> PUT
 // ---------------------------------------------------------------------------
 
 function EditSheet({
@@ -740,8 +728,6 @@ function EditSheet({
   const [name, setName] = useState(row.name)
   const [unit, setUnit] = useState(row.unit)
   const [alert, setAlert] = useState(() => fmt1(row.alert_level))
-  const [autoBlock, setAutoBlock] = useState(row.auto_block)
-  const [reserve, setReserve] = useState(() => fmt1(row.reserve))
   const [active, setActive] = useState(row.status === 'active')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -760,12 +746,6 @@ function EditSheet({
       setErr('ระดับเตือนต้องเป็นตัวเลข')
       return
     }
-    // parseQty already rejects negatives/NaN ('' -> 0); only meaningful when on
-    const rv = autoBlock ? parseQty(reserve) : 0
-    if (autoBlock && rv === null) {
-      setErr('จำนวนสำรองต้องเป็นตัวเลข 0 ขึ้นไป')
-      return
-    }
     setBusy(true)
     setErr('')
     try {
@@ -774,8 +754,6 @@ function EditSheet({
           name: n,
           unit: u,
           alert_level: a,
-          auto_block: autoBlock,
-          reserve: autoBlock ? rv : 0,
           status: active ? 'active' : 'inactive',
         }),
       )
@@ -816,29 +794,6 @@ function EditSheet({
             onChange={(e) => setAlert(e.target.value)}
           />
         </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={autoBlock}
-            disabled={busy}
-            onChange={(e) => setAutoBlock(e.target.checked)}
-          />
-          ปิดเมนู/ตัวเลือกอัตโนมัติเมื่อวัตถุดิบหมด
-        </label>
-        <p className="muted small">ถ้าไม่ติ๊ก ระบบจะไม่ปิดอะไรให้เอง (ค่าเริ่มต้น)</p>
-        <label>
-          ขายต่อได้อีก (สำรอง) ({unitLabel})
-          <input
-            value={reserve}
-            inputMode="decimal"
-            placeholder="0"
-            disabled={busy || !autoBlock}
-            onChange={(e) => setReserve(e.target.value)}
-          />
-        </label>
-        <p className="muted small">
-          สต็อกแสดง 0 แล้วยังขายต่อได้อีกเท่านี้ เผื่อประมาณการคลาดเคลื่อน เช่น ใส่ 5 = ขายต่อได้อีก 5 {unitLabel}
-        </p>
         <div className="row">
           <span className={`badge ${active ? 'approved' : 'revoked'}`}>{active ? 'เปิดใช้' : 'ปิดใช้'}</span>
           <span className="grow" />
@@ -906,9 +861,6 @@ function NewSheet({
           unit: u,
           qty: q,
           alert_level: a,
-          // auto-block defaults: no extra UI in this minimal form — flip it in "แก้ไข"
-          auto_block: false,
-          reserve: 0,
         }),
       )
       onClose()

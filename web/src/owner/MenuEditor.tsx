@@ -1,15 +1,15 @@
-// OWNER menu editor (M1-6b) — "ประเภท / หัวข้อ / ตัวเลือก" model.
+// OWNER menu editor (M1-6b) — "เมนู / หัวข้อ / ตัวเลือก" model.
 //
-// A "ประเภท" (type) = one menu_items row (e.g. ก๋วยเตี๋ยว, base price 40).
+// A "เมนู" (type) = one menu_items row (e.g. ก๋วยเตี๋ยว, base price 40).
 // Its "หัวข้อ" (lists) = option_groups with menu_item_id = that item
 // (เส้น, น้ำซุป, พิเศษ, เพิ่ม). "ตัวเลือก" (choices) = options in a group.
 // Staff pick a type then tick choices; price = base + sum(price_add).
 //
 // Everything autosaves on blur / on tap (no save button); the local state is
 // patched from each API response instead of reloading the whole menu.
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ChangeEvent, CSSProperties } from 'react'
-import { api, deleteMenuImage, errorCode, friendlyError, mediaUrl, uploadMenuImage } from '../api'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import type { ChangeEvent, CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
+import { api, deleteMenuImage, errorCode, friendlyError, mediaUrl, reorderMenuItems, uploadMenuImage } from '../api'
 import type { ChannelMarkup, Markup, MenuData, MenuItem, MenuOption, OptionGroup } from '../api'
 import { prepareMenuImage } from '../imageResize'
 import { useOwnerShop } from './shopContext'
@@ -161,6 +161,64 @@ const COPY_ICON = (
   </svg>
 )
 
+/** The ⋮⋮ drag grip (aria-hidden: the button beside it carries the label). */
+const GRIP_ICON = (
+  <svg width="14" height="20" viewBox="0 0 14 20" fill="currentColor" aria-hidden="true">
+    <circle cx="3" cy="3" r="1.8" />
+    <circle cx="3" cy="10" r="1.8" />
+    <circle cx="3" cy="17" r="1.8" />
+    <circle cx="10" cy="3" r="1.8" />
+    <circle cx="10" cy="10" r="1.8" />
+    <circle cx="10" cy="17" r="1.8" />
+  </svg>
+)
+
+// ---- reorder mode (จัดเรียง): drag & drop only, no step buttons ----
+
+type DragKind = 'cat' | 'item'
+
+/** The row a grip stands for: what it drags plus where that row sits now.
+ *  (No geometry here — the pointer/element side lives in dragRef.) */
+interface DragSource {
+  kind: DragKind
+  /** the หมวด the row belongs to */
+  label: string
+  /** the menu item id ('' would never drag: a หมวด block is never empty) */
+  id: string
+  /** 0-based place of the block / row in the current order */
+  at: number
+}
+
+/** What is lifted: that row plus its measured height = the placeholder's. */
+type DragState = DragSource & { h: number }
+
+/** Where the dashed placeholder sits: before row `at` of that หมวด. */
+type DropTarget = { kind: 'cat'; at: number } | { kind: 'item'; cat: string; at: number }
+
+function sameDrop(a: DropTarget, b: DropTarget): boolean {
+  if (a.at !== b.at || a.kind !== b.kind) return false
+  return a.kind === 'item' && b.kind === 'item' ? a.cat === b.cat : true
+}
+
+function clampIndex(n: number, max: number): number {
+  return Math.max(0, Math.min(n, max))
+}
+
+/** The POS list order: sort_order first, the name only breaks a tie. */
+function byPosOrder(a: MenuItem, b: MenuItem): number {
+  return a.sort_order - b.sort_order || a.name.localeCompare(b.name, 'th')
+}
+
+/** หมวด blocks in POS order = first appearance of the items sorted by
+ *  sort_order, so the owner list groups exactly like the POS dropdowns. */
+function groupsOf(items: MenuItem[]): { label: string; items: MenuItem[] }[] {
+  const sorted = [...items].sort(byPosOrder)
+  return Array.from(new Set(sorted.map(catOf))).map((label) => ({
+    label,
+    items: sorted.filter((i) => catOf(i) === label),
+  }))
+}
+
 export default function MenuEditor() {
   const { shopId } = useOwnerShop()
   const [data, setData] = useState<MenuData | null>(null)
@@ -175,10 +233,22 @@ export default function MenuEditor() {
   const [imgErr, setImgErr] = useState('')
   // "template" copy sheet (open only while one item is being edited)
   const [tplOpen, setTplOpen] = useState(false)
-  // whole-ประเภท "template" sheet (list view): null = closed, '' = no source
-  // preselected, otherwise the id of the ประเภท whose "ทำซ้ำ" was tapped
+  // whole-เมนู "template" sheet (list view): null = closed, '' = no source
+  // preselected, otherwise the id of the เมนู whose "ทำซ้ำ" was tapped
   const [dupFrom, setDupFrom] = useState<string | null>(null)
+  // reorder mode (จัดเรียง): drag & drop หมวด and เมนู, saved per drop
+  const [reorder, setReorder] = useState(false)
+  const [drag, setDrag] = useState<DragState | null>(null)
+  const [drop, setDrop] = useState<DropTarget | null>(null)
   const saveTimer = useRef<number | null>(null)
+  /** the live drag (ghost element + pointer origin); null = not dragging */
+  const dragRef = useRef<(DragState & { ghost: HTMLElement; startY: number; ac: AbortController }) | null>(null)
+  /** setDrop's mirror: the pointer handlers are bound once, at drag start */
+  const dropRef = useRef<DropTarget | null>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const ghostHostRef = useRef<HTMLDivElement | null>(null)
+  /** latest menu, for the drop handler that was bound at drag start */
+  const dataRef = useRef<MenuData | null>(null)
 
   const load = useCallback(async () => {
     if (!shopId) {
@@ -229,6 +299,204 @@ export default function MenuEditor() {
     if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
     setSaveState({ text, bad })
     saveTimer.current = window.setTimeout(() => setSaveState(null), bad ? 4000 : 1500)
+  }
+
+  // ---- reorder mode (จัดเรียง): pointer-event drag & drop, touch + mouse ----
+
+  useEffect(() => {
+    dataRef.current = data
+  }, [data])
+
+  // leaving the page mid-drag: drop the window listeners and the floating clone
+  useEffect(
+    () => () => {
+      const d = dragRef.current
+      if (!d) return
+      d.ac.abort()
+      d.ghost.remove()
+      document.body.classList.remove('menu-dragging')
+    },
+    [],
+  )
+
+  function setDropTarget(t: DropTarget | null) {
+    dropRef.current = t
+    setDrop(t)
+  }
+
+  /** Every "gap between rows" the pointer could be dropped into. */
+  function dropGaps(): Array<{ t: DropTarget; mid: number }> {
+    const list = listRef.current
+    const d = dragRef.current
+    if (!list || !d) return []
+    const gaps: Array<{ t: DropTarget; mid: number }> = []
+    const grps = Array.from(list.querySelectorAll<HTMLElement>('.ro-grp'))
+    if (d.kind === 'cat') {
+      grps.forEach((g, i) => {
+        const r = g.getBoundingClientRect()
+        const prev = i === 0 ? r.top - 2 : grps[i - 1].getBoundingClientRect().bottom
+        gaps.push({ t: { kind: 'cat', at: i }, mid: (prev + r.top) / 2 })
+      })
+      const last = grps.length > 0 ? grps[grps.length - 1].getBoundingClientRect() : null
+      if (last) gaps.push({ t: { kind: 'cat', at: grps.length }, mid: last.bottom + 12 })
+      return gaps
+    }
+    for (const grp of grps) {
+      const cat = grp.dataset['cat'] ?? ''
+      const box = grp.querySelector<HTMLElement>('.ro-items')
+      if (!box) continue
+      const rows = Array.from(box.children).filter((n) => n.classList.contains('ro-item')) as HTMLElement[]
+      const headBottom = grp.querySelector<HTMLElement>('.ro-head')?.getBoundingClientRect().bottom
+      rows.forEach((row, i) => {
+        const r = row.getBoundingClientRect()
+        const prev = i === 0 ? headBottom ?? r.top - 2 : rows[i - 1].getBoundingClientRect().bottom
+        gaps.push({ t: { kind: 'item', cat, at: i }, mid: (prev + r.top) / 2 })
+      })
+      const boxR = box.getBoundingClientRect()
+      const lastBottom = rows.length > 0 ? rows[rows.length - 1].getBoundingClientRect().bottom : boxR.top
+      gaps.push({ t: { kind: 'item', cat, at: rows.length }, mid: lastBottom + (rows.length > 0 ? 12 : boxR.height / 2) })
+    }
+    return gaps
+  }
+
+  /** Drop landed: rebuild the whole order (หมวด blocks, เมนู inside) and send
+   *  ONE request with every menu item of the shop — sort_order 10, 20, 30 …
+   *  in the new flattened order. Local state is patched optimistically and
+   *  reverted when the request fails. */
+  async function applyDrop(d: DragSource, target: DropTarget) {
+    const cur = dataRef.current
+    if (!cur || cur.items.length === 0) return
+    const gs = groupsOf(cur.items).map((g) => ({ label: g.label, items: [...g.items] }))
+    if (target.kind === 'cat') {
+      const from = gs.findIndex((g) => g.label === d.label)
+      if (from < 0) return
+      const [block] = gs.splice(from, 1)
+      gs.splice(clampIndex(target.at > from ? target.at - 1 : target.at, gs.length), 0, block)
+    } else {
+      const from = gs.findIndex((g) => g.items.some((x) => x.id === d.id))
+      const ii = from < 0 ? -1 : gs[from].items.findIndex((x) => x.id === d.id)
+      const to = gs.findIndex((g) => g.label === target.cat)
+      if (from < 0 || ii < 0 || to < 0) return
+      const [moving] = gs[from].items.splice(ii, 1)
+      const at = to === from && target.at > ii ? target.at - 1 : target.at
+      gs[to].items.splice(clampIndex(at, gs[to].items.length), 0, moving)
+    }
+    const rows: Array<{ id: string; category: string; sort_order: number }> = []
+    for (const g of gs) {
+      for (const it of g.items) rows.push({ id: it.id, category: g.label, sort_order: (rows.length + 1) * 10 })
+    }
+    const before = groupsOf(cur.items)
+    const unchanged =
+      before.length === gs.length &&
+      before.every((g, i) => g.label === gs[i].label && g.items.every((it, j) => gs[i].items[j]?.id === it.id))
+    if (unchanged) return
+    const prev = new Map(cur.items.map((it) => [it.id, it]))
+    const next = new Map(rows.map((r) => [r.id, r]))
+    setData((p) =>
+      p
+        ? {
+            ...p,
+            items: p.items.map((x) => {
+              const r = next.get(x.id)
+              return r ? { ...x, category: r.category, sort_order: r.sort_order } : x
+            }),
+          }
+        : p,
+    )
+    try {
+      await reorderMenuItems(rows)
+      flash('บันทึกลำดับแล้ว')
+    } catch (e) {
+      // revert only the order fields, so a field saved meanwhile survives
+      setData((p) =>
+        p
+          ? {
+              ...p,
+              items: p.items.map((x) => {
+                const o = prev.get(x.id)
+                return o ? { ...x, category: o.category, sort_order: o.sort_order } : x
+              }),
+            }
+          : p,
+      )
+      flash(friendlyError(e), true)
+    }
+  }
+
+  function finishDrag(cancelled: boolean) {
+    const d = dragRef.current
+    if (!d) return
+    dragRef.current = null
+    // listeners were added by an earlier render's closures: drop them by signal
+    d.ac.abort()
+    document.body.classList.remove('menu-dragging')
+    d.ghost.remove()
+    const target = dropRef.current
+    setDrag(null)
+    setDropTarget(null)
+    if (!cancelled && target) void applyDrop(d, target)
+  }
+
+  function onDragMove(e: PointerEvent) {
+    const d = dragRef.current
+    if (!d) return
+    e.preventDefault()
+    d.ghost.style.transform = `translateY(${e.clientY - d.startY}px) scale(1.02)`
+    let best: { t: DropTarget; dist: number } | null = null
+    for (const g of dropGaps()) {
+      const dist = Math.abs(e.clientY - g.mid)
+      if (best === null || dist < best.dist) best = { t: g.t, dist }
+    }
+    if (best !== null && (dropRef.current === null || !sameDrop(dropRef.current, best.t))) setDropTarget(best.t)
+  }
+
+  function onDragUp() {
+    finishDrag(false)
+  }
+
+  function onDragCancel() {
+    finishDrag(true)
+  }
+
+  /** A drag starts ONLY on the ⋮⋮ grip — it is the one element with
+   *  touch-action:none, so a finger on it never scrolls the page instead. */
+  function startDrag(e: ReactPointerEvent<HTMLButtonElement>, src: DragSource) {
+    if (!reorder || dragRef.current !== null) return
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    const handle = e.currentTarget
+    const host = ghostHostRef.current
+    const el = (src.kind === 'cat' ? handle.closest('.ro-grp') : handle.closest('.ro-item')) as HTMLElement | null
+    if (!el || !host) return
+    e.preventDefault()
+    // the lifted row follows the finger as a fixed clone of itself
+    const rect = el.getBoundingClientRect()
+    const ghost = el.cloneNode(true) as HTMLElement
+    ghost.classList.add('ro-lift')
+    ghost.style.left = `${rect.left}px`
+    ghost.style.top = `${rect.top}px`
+    ghost.style.width = `${rect.width}px`
+    host.appendChild(ghost)
+    const ac = new AbortController()
+    dragRef.current = { ...src, h: rect.height, ghost, startY: e.clientY, ac }
+    setDrag({ ...src, h: rect.height })
+    setDropTarget(src.kind === 'cat' ? { kind: 'cat', at: src.at } : { kind: 'item', cat: src.label, at: src.at })
+    document.body.classList.add('menu-dragging')
+    try {
+      handle.setPointerCapture(e.pointerId)
+    } catch {
+      // some browsers refuse: the window listeners below still drive the drag
+    }
+    window.addEventListener('pointermove', onDragMove, { signal: ac.signal, passive: false })
+    window.addEventListener('pointerup', onDragUp, { signal: ac.signal })
+    window.addEventListener('pointercancel', onDragCancel, { signal: ac.signal })
+  }
+
+  /** Leave reorder mode: never keep a row lifted behind. */
+  function toggleReorder() {
+    if (dragRef.current !== null) finishDrag(true)
+    setDrag(null)
+    setDropTarget(null)
+    setReorder((v) => !v)
   }
 
   // ---- local state patching (one row per response, no full reload) ----
@@ -347,10 +615,10 @@ export default function MenuEditor() {
     }
   }
 
-  // "+ เพิ่มประเภท": item ประเภทใหม่ (base 0) + one pick-one list "เมนู".
+  // "+ เพิ่มเมนู": item เมนูใหม่ (base 0) + one pick-one list "เมนู".
   async function addType() {
     if (!shopId) return
-    const name = 'ประเภทใหม่'
+    const name = 'เมนูใหม่'
     const itemId = crypto.randomUUID()
     try {
       const item = await api<MenuItem>('POST', '/api/owner/menu-items', {
@@ -444,7 +712,7 @@ export default function MenuEditor() {
     flash('คัดลอกหัวข้อแล้ว')
   }
 
-  /** A whole-ประเภท template landed: close the sheet, flash what was made,
+  /** A whole-เมนู template landed: close the sheet, flash what was made,
    *  and (สร้างแล้วแก้ไข) jump straight into the new item's editor. */
   function typeTemplateApplied(newId: string | null, name: string, open: boolean) {
     setDupFrom(null)
@@ -455,7 +723,7 @@ export default function MenuEditor() {
   // Never-sold types are deleted for real; ones on old bills are hidden
   // (server decides, `archived` says which). Either way they leave both apps.
   async function deleteType(it: MenuItem) {
-    if (!window.confirm(`ลบประเภท "${it.name}"? หัวข้อและตัวเลือกทั้งหมดจะหายไปจากหน้าขาย`)) return
+    if (!window.confirm(`ลบเมนู "${it.name}"? หัวข้อและตัวเลือกทั้งหมดจะหายไปจากหน้าขาย`)) return
     try {
       const r = await api<{ archived: boolean }>('DELETE', `/api/owner/menu-items/${encodeURIComponent(it.id)}`)
       setData((prev) => (prev ? { ...prev, items: prev.items.filter((x) => x.id !== it.id) } : prev))
@@ -560,11 +828,9 @@ export default function MenuEditor() {
   const items = data ? data.items : []
   /** หมวด the owner chose, in menu order (the datalists suggest these) */
   const categories = Array.from(new Set(items.map(chosenCat).filter((c) => c !== '')))
-  /** the list view: one block per หมวด (a menu with none is grouped under its own name) */
-  const catGroups: { label: string; items: MenuItem[] }[] = Array.from(new Set(items.map(catOf))).map((c) => ({
-    label: c,
-    items: items.filter((i) => catOf(i) === c),
-  }))
+  /** the list view: one block per หมวด, in POS order (first appearance by
+   *  sort_order — NOT alphabetical), so owner and POS match */
+  const catGroups = groupsOf(items)
   /** Lists of one item: attached to it, not shop-wide, not tier-pricing. */
   const listsOf = (itemId: string) =>
     data ? data.option_groups.filter((g) => g.menu_item_id === itemId && !g.tier_pricing) : []
@@ -588,6 +854,11 @@ export default function MenuEditor() {
   function listsSummary(it: MenuItem): string {
     const parts = listsOf(it.id).map((g) => `${g.name} (${optionsOf(g.id).length})`)
     return parts.length > 0 ? parts.join(' · ') : 'ยังไม่มีหัวข้อ'
+  }
+
+  /** Compact price of a reorder row (0 = priced by its choices). */
+  function priceShort(it: MenuItem): string {
+    return it.base_price > 0 ? `฿${fmtBaht(it.base_price)}` : '—'
   }
 
   // ================= TYPE EDITOR =================
@@ -772,7 +1043,7 @@ export default function MenuEditor() {
           <button
             className="btn ghost"
             style={{ minHeight: 48, border: '1.5px dashed var(--border)', color: 'var(--green-dark)' }}
-            title="คัดลอกหัวข้อและตัวเลือกจากประเภทอื่น มาเป็นชุดใหม่ของประเภทนี้ (ต้นทางไม่เปลี่ยน)"
+            title="คัดลอกหัวข้อและตัวเลือกจากเมนูอื่น มาเป็นชุดใหม่ของเมนูนี้ (ต้นทางไม่เปลี่ยน)"
             disabled={!shopId}
             onClick={() => setTplOpen(true)}
           >
@@ -785,7 +1056,7 @@ export default function MenuEditor() {
           disabled={busy}
           onClick={() => void deleteType(it)}
         >
-          ลบประเภท "{it.name}"
+          ลบเมนู "{it.name}"
         </button>
 
         {tplOpen && data && shopId ? (
@@ -815,21 +1086,98 @@ export default function MenuEditor() {
       ) : null}
 
       <div className="row">
-        <h2 className="grow">เมนู (ประเภท) {items.length}</h2>
+        <h2 className="grow">เมนู {items.length}</h2>
         {/* flash() messages of the list view, e.g. "สร้าง … แล้ว" from the template sheet */}
         {saveState ? (
           <span className={`${saveState.bad ? 'error' : 'muted'} small`} role="status">
             {saveState.text}
           </span>
         ) : null}
+        {items.length > 0 ? (
+          <button
+            type="button"
+            className={`btn ${reorder ? 'primary' : 'ghost'}`}
+            aria-pressed={reorder}
+            onClick={toggleReorder}
+          >
+            {reorder ? 'เสร็จ' : 'จัดเรียง'}
+          </button>
+        ) : null}
         <button className="btn ghost" disabled={busy || !shopId} onClick={() => void load()}>
           รีเฟรช
         </button>
       </div>
-      <p className="muted small">ประเภท = ปุ่มใหญ่ที่พนักงานกดก่อน แล้วค่อยติ๊กตัวเลือกข้างใน</p>
+
+      {reorder ? (
+        <p className="small ro-hint">ลากที่ ⋮⋮ เพื่อเลื่อนหมวดหรือเมนู — บันทึกอัตโนมัติ</p>
+      ) : (
+        <p className="muted small">เมนู = ปุ่มใหญ่ที่พนักงานกดก่อน แล้วค่อยติ๊กตัวเลือกข้างใน</p>
+      )}
 
       {shopId && !data && !msg ? <p className="muted">กำลังโหลดเมนู…</p> : null}
 
+      {reorder ? (
+        <div className="menu-reorder" ref={listRef}>
+          {catGroups.map((g, gi) => (
+            <Fragment key={g.label}>
+              {drop !== null && drop.kind === 'cat' && drop.at === gi ? (
+                <div className="ro-gap ro-gap-cat" style={{ height: drag?.h ?? 44 }} />
+              ) : null}
+              <section
+                className="ro-grp"
+                data-cat={g.label}
+                style={drag?.kind === 'cat' && drag.label === g.label ? { visibility: 'hidden' } : undefined}
+              >
+                <div className="ro-head">
+                  <button
+                    type="button"
+                    className="grip"
+                    aria-label={`ลากเพื่อย้ายหมวด ${g.label}`}
+                    onPointerDown={(e) => startDrag(e, { kind: 'cat', label: g.label, id: g.items[0].id, at: gi })}
+                  >
+                    {GRIP_ICON}
+                  </button>
+                  <h3 className="ro-title">{g.label}</h3>
+                  <span className="ro-count muted small">{g.items.length}</span>
+                </div>
+                <div className="ro-items">
+                  {g.items.map((it, ii) => (
+                    <Fragment key={it.id}>
+                      {drop !== null && drop.kind === 'item' && drop.cat === g.label && drop.at === ii ? (
+                        <div className="ro-gap" style={{ height: drag?.h ?? 44 }} />
+                      ) : null}
+                      <div
+                        className="ro-item"
+                        style={drag?.kind === 'item' && drag.id === it.id ? { visibility: 'hidden' } : undefined}
+                      >
+                        <button
+                          type="button"
+                          className="grip"
+                          aria-label={`ลากเพื่อย้าย ${it.name}`}
+                          onPointerDown={(e) => startDrag(e, { kind: 'item', label: g.label, id: it.id, at: ii })}
+                        >
+                          {GRIP_ICON}
+                        </button>
+                        <span className="nm">{it.name}</span>
+                        <span className="pr">{priceShort(it)}</span>
+                      </div>
+                    </Fragment>
+                  ))}
+                  {drop !== null && drop.kind === 'item' && drop.cat === g.label && drop.at === g.items.length ? (
+                    <div className="ro-gap" style={{ height: drag?.h ?? 44 }} />
+                  ) : null}
+                </div>
+              </section>
+            </Fragment>
+          ))}
+          {drop !== null && drop.kind === 'cat' && drop.at === catGroups.length ? (
+            <div className="ro-gap ro-gap-cat" style={{ height: drag?.h ?? 44 }} />
+          ) : null}
+          {/* the lifted clone lives here: inside .menu-editor so it keeps its look */}
+          <div className="ro-ghost-host" ref={ghostHostRef} />
+        </div>
+      ) : (
+      <>
       {catGroups.map((g) => (
         <div key={g.label || '__none'}>
           {g.items.length === 1 && g.items[0].name.trim() === g.label ? null : (
@@ -840,7 +1188,7 @@ export default function MenuEditor() {
           <div className="list">
           {g.items.map((it) => (
             <div className={`item ${it.status === 'active' ? 'ok-item' : ''}`} key={it.id}>
-              <button type="button" style={CARD_TAP} onClick={() => setEditId(it.id)} aria-label={`แก้ไขประเภท ${it.name}`}>
+              <button type="button" style={CARD_TAP} onClick={() => setEditId(it.id)} aria-label={`แก้ไขเมนู ${it.name}`}>
                 <span style={{ display: 'flex', width: '100%', alignItems: 'baseline', gap: 8 }}>
                   <strong
                     style={{
@@ -865,8 +1213,8 @@ export default function MenuEditor() {
                 <button
                   type="button"
                   className="btn ghost tpl-dup"
-                  title="สร้างประเภทใหม่จากประเภทนี้ทั้งชุด (ราคา หัวข้อ ตัวเลือก)"
-                  aria-label={`ทำซ้ำประเภท ${it.name}`}
+                  title="สร้างเมนูใหม่จากเมนูนี้ทั้งชุด (ราคา หัวข้อ ตัวเลือก)"
+                  aria-label={`ทำซ้ำเมนู ${it.name}`}
                   disabled={busy || !shopId}
                   onClick={() => setDupFrom(it.id)}
                 >
@@ -885,16 +1233,16 @@ export default function MenuEditor() {
   
         </div>
       ))}
-      {data && items.length === 0 ? <p className="muted">ยังไม่มีประเภท — กด "+ เพิ่มประเภท" เพื่อเริ่ม</p> : null}
+      {data && items.length === 0 ? <p className="muted">ยังไม่มีเมนู — กด "+ เพิ่มเมนู" เพื่อเริ่ม</p> : null}
 
       <div className="row">
         <button className="btn primary grow" disabled={busy || !shopId} onClick={() => void addType()}>
-          + เพิ่มประเภท
+          + เพิ่มเมนู
         </button>
         {items.length > 0 ? (
           <button
             className="btn ghost"
-            title="สร้างประเภทใหม่จากประเภทที่มีอยู่ทั้งชุด (ราคา หัวข้อ ตัวเลือก)"
+            title="สร้างเมนูใหม่จากเมนูที่มีอยู่ทั้งชุด (ราคา หัวข้อ ตัวเลือก)"
             disabled={busy || !shopId}
             onClick={() => setDupFrom('')}
           >
@@ -905,9 +1253,9 @@ export default function MenuEditor() {
 
       {sharedLists.length > 0 ? (
         <section className="card">
-          <h2>ตัวเลือกแบบเก่า (ขึ้นกับทุกประเภท)</h2>
+          <h2>ตัวเลือกแบบเก่า (ขึ้นกับทุกเมนู)</h2>
           <p className="muted small">
-            หัวข้อเหล่านี้สร้างจากหน้าเมนูแบบเก่า และขึ้นในหน้าขายของทุกประเภท — ถ้าไม่ได้ตั้งใจ ให้ลบทิ้ง
+            หัวข้อเหล่านี้สร้างจากหน้าเมนูแบบเก่า และขึ้นในหน้าขายของทุกเมนู — ถ้าไม่ได้ตั้งใจ ให้ลบทิ้ง
           </p>
           {sharedLists.map((g) => (
             <div className="row" key={g.id} style={{ flexWrap: 'nowrap' }}>
@@ -925,7 +1273,7 @@ export default function MenuEditor() {
 
       <section className="card">
         <h2>ค่าส่วนต่างเดลิเวอรี่</h2>
-        <p className="muted small">บวกราคาเมื่อขายผ่านแอปเดลิเวอรี่ ใช้กับทุกประเภท — ราคาในแอป = ราคาหน้าร้าน + ค่าส่วนต่าง</p>
+        <p className="muted small">บวกราคาเมื่อขายผ่านแอปเดลิเวอรี่ ใช้กับทุกเมนู — ราคาในแอป = ราคาหน้าร้าน + ค่าส่วนต่าง</p>
         {markupMsg ? (
           <p className={`${markupMsg.bad ? 'error' : 'muted'} small`} role="status">
             {markupMsg.text}
@@ -974,6 +1322,8 @@ export default function MenuEditor() {
           onApplied={typeTemplateApplied}
         />
       ) : null}
+      </>
+      )}
     </section>
   )
 }
@@ -1081,17 +1431,17 @@ function TemplateSheet({
       <div
         className="sheet"
         role="dialog"
-        aria-label="template — คัดลอกหัวข้อจากประเภทอื่น"
+        aria-label="template — คัดลอกหัวข้อจากเมนูอื่น"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2>template — คัดลอกหัวข้อจากประเภทอื่น</h2>
+        <h2>template — คัดลอกหัวข้อจากเมนูอื่น</h2>
         <p className="muted small">
-          เลือกประเภทที่มีหัวข้อครบแล้ว แล้วติ๊กหัวข้อที่จะคัดลอกมาเป็นชุดใหม่ของ "{item.name}" — ประเภทต้นทางไม่เปลี่ยนแปลง
+          เลือกเมนูที่มีหัวข้อครบแล้ว แล้วติ๊กหัวข้อที่จะคัดลอกมาเป็นชุดใหม่ของ "{item.name}" — เมนูต้นทางไม่เปลี่ยนแปลง
         </p>
         {sources.length > 0 ? (
           <>
             <label>
-              คัดลอกจากประเภท
+              คัดลอกจากเมนู
               <select
                 value={srcId}
                 disabled={busy}
@@ -1139,7 +1489,7 @@ function TemplateSheet({
             })}
           </>
         ) : (
-          <p className="muted">ยังไม่มีประเภทอื่นที่มีหัวข้อ — สร้างหัวข้อของประเภทหนึ่งให้เสร็จก่อน แล้วค่อยใช้ template</p>
+          <p className="muted">ยังไม่มีเมนูอื่นที่มีหัวข้อ — สร้างหัวข้อของเมนูหนึ่งให้เสร็จก่อน แล้วค่อยใช้ template</p>
         )}
         {err ? <p className="error small">{err}</p> : null}
         {busy ? <p className="muted small">กำลังคัดลอก…</p> : null}
@@ -1160,7 +1510,7 @@ function TemplateSheet({
 }
 
 // ---------------------------------------------------------------------------
-// "template" sheet (whole ประเภท): duplicate ONE menu item together with its
+// "template" sheet (whole เมนู): duplicate ONE menu item together with its
 // หัวข้อ and ตัวเลือก — the "+ จาก template" button / "ทำซ้ำ" of the list
 // view. Same deep-copy rule as TemplateSheet above: every row is POSTed fresh
 // with a new id (the NEW item's menu_item_id for the groups), so the source
@@ -1191,7 +1541,7 @@ function TypeTemplateSheet({
   byCat: { label: string; items: MenuItem[] }[]
   /** หมวด names for the datalist (same suggestions the editor gives) */
   categories: string[]
-  /** item id to open on ('' = the first ประเภท in menu order) */
+  /** item id to open on ('' = the first เมนู in menu order) */
   preselect: string
   onClose: () => void
   /** patch helpers of the editor (upsertItem / upsertGroup / upsertOption) */
@@ -1201,7 +1551,7 @@ function TypeTemplateSheet({
   /** create finished: non-null = open the new item's editor ("สร้างแล้วแก้ไข") */
   onApplied: (newId: string | null, name: string, open: boolean) => void
 }) {
-  // source the sheet opens on: the ประเภท whose "ทำซ้ำ" was tapped, else the first
+  // source the sheet opens on: the เมนู whose "ทำซ้ำ" was tapped, else the first
   const firstSrc: MenuItem | undefined = menu.items.find((i) => i.id === preselect) ?? (menu.items.length > 0 ? menu.items[0] : undefined)
   const [srcId, setSrcId] = useState(firstSrc ? firstSrc.id : '')
   const [name, setName] = useState(firstSrc ? `${firstSrc.name} (สำเนา)` : '')
@@ -1256,7 +1606,7 @@ function TypeTemplateSheet({
   const newCat = catT === '' ? nameT : catT
   const satang = bahtToSatang(price)
   const basePrice = typeof satang === 'number' ? satang : 0
-  const nameErr = nameT === '' ? 'กรอกชื่อประเภทก่อน' : ''
+  const nameErr = nameT === '' ? 'กรอกชื่อเมนูก่อน' : ''
   const priceErr = satang === 'invalid' ? 'ราคาไม่ถูกต้อง' : ''
   // The row being created is skipped: after a partial failure it is already in
   // the local state, and the retry must not be blocked by its own name.
@@ -1282,7 +1632,7 @@ function TypeTemplateSheet({
     try {
       // Same body shape as addType, but with the typed name/หมวด/ราคา and the
       // source's menu_type / tier+channel prices / cost / sort_order (so the
-      // copy sorts right next to the ประเภท it came from).
+      // copy sorts right next to the เมนู it came from).
       let item = await api<MenuItem>('POST', '/api/owner/menu-items', {
         id: newItemId.current,
         shop_id: shopId,
@@ -1355,15 +1705,15 @@ function TypeTemplateSheet({
       <div
         className="sheet"
         role="dialog"
-        aria-label="template — สร้างประเภทใหม่จากประเภทเดิม"
+        aria-label="template — สร้างเมนูใหม่จากเมนูเดิม"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2>template — สร้างประเภทใหม่จากประเภทเดิม</h2>
-        <p className="muted small">สร้างประเภทใหม่ทั้งชุด (ราคา หัวข้อ ตัวเลือก) จากประเภทที่มีอยู่ — ต้นทางไม่เปลี่ยนแปลง</p>
+        <h2>template — สร้างเมนูใหม่จากเมนูเดิม</h2>
+        <p className="muted small">สร้างเมนูใหม่ทั้งชุด (ราคา หัวข้อ ตัวเลือก) จากเมนูที่มีอยู่ — ต้นทางไม่เปลี่ยนแปลง</p>
         {src ? (
           <>
             <label>
-              คัดลอกจากประเภท
+              คัดลอกจากเมนู
               <select value={srcId} disabled={busy} onChange={(e) => loadSource(e.target.value)}>
                 {byCat.map((cg) => (
                   <optgroup key={cg.label} label={cg.label}>
@@ -1377,7 +1727,7 @@ function TypeTemplateSheet({
               </select>
             </label>
             <label>
-              ชื่อประเภทใหม่
+              ชื่อเมนูใหม่
               <input
                 ref={nameRef}
                 value={name}
@@ -1405,7 +1755,7 @@ function TypeTemplateSheet({
                 <input
                   value={cat}
                   list="menu-categories"
-                  placeholder="ไม่เลือก = ใช้ชื่อประเภทเป็นหมวด"
+                  placeholder="ไม่เลือก = ใช้ชื่อเมนูเป็นหมวด"
                   disabled={busy}
                   onChange={(e) => setCat(e.target.value)}
                 />
@@ -1449,7 +1799,7 @@ function TypeTemplateSheet({
               {groups.length > 0 ? <span className="muted small">{groups.length} หัวข้อ</span> : null}
             </h3>
             {groups.length === 0 ? (
-              <p className="muted small">ประเภทนี้ยังไม่มีหัวข้อ — ประเภทใหม่จะไม่มีหัวข้อ</p>
+              <p className="muted small">เมนูนี้ยังไม่มีหัวข้อ — เมนูใหม่จะไม่มีหัวข้อ</p>
             ) : (
               groups.map((g) => {
                 const opts = optsOf(g.id)
@@ -1505,7 +1855,7 @@ function TypeTemplateSheet({
             </div>
           </>
         ) : (
-          <p className="muted">ยังไม่มีประเภท — สร้างประเภทแรกก่อน แล้วค่อยใช้ template</p>
+          <p className="muted">ยังไม่มีเมนู — สร้างเมนูแรกก่อน แล้วค่อยใช้ template</p>
         )}
       </div>
     </div>

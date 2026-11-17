@@ -951,7 +951,7 @@ export default function Counter({
 
   function tapCategory(cat: string) {
     const inCat = items.filter((i) => catOf(i) === cat)
-    const pick = inCat.find((i) => !i.sold_out && !i.stock_out) ?? inCat[0]
+    const pick = inCat.find((i) => !i.sold_out) ?? inCat[0]
     if (pick) tapType(pick)
   }
 
@@ -964,16 +964,15 @@ export default function Counter({
   }
 
   function tapType(item: MenuItem) {
-    // manual sold_out OR derived stock_out: nothing to sell — long-press still
-    // flips the MANUAL flag only
-    if (item.sold_out || item.stock_out) return
+    // sold out: nothing to sell — long-press still flips the manual flag only
+    if (item.sold_out) return
     setTypeId(item.id)
     setMsg('')
   }
 
   /** Group mode straight from the fields (no owner-set "mode" column). */
   function tapOption(g: GroupWithOptions, opt: MenuOption) {
-    if (opt.sold_out || opt.stock_out || !type) return
+    if (opt.sold_out || !type) return
     const single = g.group.max_select === 1
     if (picks.includes(opt.id)) {
       // required pick-one: a required choice can never be un-tapped, only switched
@@ -997,7 +996,7 @@ export default function Counter({
 
   /** QUICK type: one tap on a choice goes straight into the cart. */
   function tapQuickOption(item: MenuItem, opt: MenuOption) {
-    if (opt.sold_out || opt.stock_out || !menu) return
+    if (opt.sold_out || !menu) return
     const r = priceLine(menu, item, activeChannel, [opt.id])
     if (!r.ok) {
       setMsg(r.error)
@@ -1136,7 +1135,7 @@ export default function Counter({
     setDrafts((prev) => ({ ...prev, current: blankCart(channel) }))
     setPicks([])
     void loadOrders()
-    // the order just consumed ingredients: pull fresh derived stock_out flags
+    // pull the fresh menu (another device may have flipped sold_out flags)
     void loadMenu()
     if (andPay) {
       setPayResult(null)
@@ -1194,7 +1193,7 @@ export default function Counter({
     setPicks([])
     setStaffMealOn(false)
     void loadOrders()
-    // the plate just consumed ingredients: pull fresh derived stock_out flags
+    // pull the fresh menu (another device may have flipped sold_out flags)
     void loadMenu()
     flash('ส่งครัวแล้ว (สวัสดิการ)')
   }
@@ -1220,7 +1219,7 @@ export default function Counter({
     setDrafts((prev) => ({ ...prev, current: blankCart(channel) }))
     setPicks([])
     void loadOrders()
-    // the added lines just consumed ingredients: refresh derived stock_out
+    // pull the fresh menu (another device may have flipped sold_out flags)
     void loadMenu()
     setTab('queue')
     flash(`เพิ่มเข้าคิว #${order.queue_number} แล้ว · ${baht(order.total_amount)}`)
@@ -1330,14 +1329,12 @@ export default function Counter({
     missingGroups.length === 0 &&
     !!priced &&
     priced.ok &&
-    !(type.sold_out || type.stock_out)
+    !type.sold_out
   const addLabel = !type
     ? ''
     : type.sold_out
       ? `เมนูนี้ของหมดอยู่`
-      : type.stock_out
-        ? `เมนูนี้วัตถุดิบหมด`
-        : missingGroups.length > 0
+      : missingGroups.length > 0
         ? `ยังไม่ได้เลือก: ${missingGroups.join(', ')}`
         : priced && priced.ok
           ? `ใส่ตะกร้า · ${baht(priced.unitPrice)}`
@@ -1691,7 +1688,7 @@ export default function Counter({
               />
             ) : null}
             {categories.length > 0 ? (
-              <div className="pos-dd-wrap">
+              <div className="pos-dd-wrap pos-dd-cat">
                 <button
                   type="button"
                   className={`pos-dd-btn${ddOpen === 'cat' ? ' open' : ''}`}
@@ -1734,7 +1731,7 @@ export default function Counter({
               </div>
             ) : null}
             {showMenuRow ? (
-              <div className="pos-dd-wrap">
+              <div className="pos-dd-wrap pos-dd-menu">
                 <button
                   type="button"
                   className={`pos-dd-btn${ddOpen === 'menu' ? ' open' : ''}`}
@@ -1746,17 +1743,15 @@ export default function Counter({
                     <small>
                       เมนู ·{' '}
                       {type ? (
-                        type.sold_out || type.stock_out ? (
-                          <span className="pos-dd-status">
-                            {type.sold_out ? 'ของหมด' : 'วัตถุดิบหมด'}
-                          </span>
+                        type.sold_out ? (
+                          <span className="pos-dd-status">ของหมด</span>
                         ) : (
                           baht(type.base_price)
                         )
                       ) : null}
                     </small>
                     {type ? (
-                      <b className={type.sold_out || type.stock_out ? 'soldout' : undefined}>
+                      <b className={type.sold_out ? 'soldout' : undefined}>
                         {type.name}
                       </b>
                     ) : (
@@ -1780,7 +1775,7 @@ export default function Counter({
                           role="option"
                           ariaSelected={type?.id === it.id}
                           className={`pos-dd-opt${type?.id === it.id ? ' on' : ''}${
-                            it.sold_out || it.stock_out ? ' soldout' : ''
+                            it.sold_out ? ' soldout' : ''
                           }`}
                           onLong={() => void toggleItemSoldOut(it)}
                           onTap={() => {
@@ -1790,10 +1785,8 @@ export default function Counter({
                         >
                           {TICK_ICON}
                           <span className="pos-dd-name">{it.name}</span>
-                          {it.sold_out || it.stock_out ? (
-                            <small className="pos-dd-meta bad">
-                              {it.sold_out ? 'ของหมด' : 'วัตถุดิบหมด'}
-                            </small>
+                          {it.sold_out ? (
+                            <small className="pos-dd-meta bad">ของหมด</small>
                           ) : (
                             <small className="pos-dd-meta">{baht(it.base_price)}</small>
                           )}
@@ -1861,13 +1854,13 @@ export default function Counter({
     const btn = (
       <LongPressButton
         key={o.id}
-        className={`pos-choice${on || inCart > 0 ? ' on' : ''}${o.sold_out || o.stock_out ? ' soldout' : ''}`}
+        className={`pos-choice${on || inCart > 0 ? ' on' : ''}${o.sold_out ? ' soldout' : ''}`}
         onLong={() => void toggleOptionSoldOut(o)}
         onTap={() => (quick ? tapQuickOption(type, o) : tapOption(g, o))}
       >
         <span className="pos-choice-name">
           {o.name}
-          {o.sold_out ? ' (หมด)' : o.stock_out ? ' (วัตถุดิบหมด)' : ''}
+          {o.sold_out ? ' (หมด)' : ''}
         </span>
         {inCart > 0 ? (
           <span className="pos-choice-badge" aria-hidden="true">

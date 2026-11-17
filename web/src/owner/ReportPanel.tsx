@@ -574,7 +574,7 @@ export default function ReportPanel() {
   const filterBits: string[] = []
   if (timeLabel !== null) filterBits.push(`เวลา ${timeLabel} น.`)
   if (menuItemId !== '') {
-    filterBits.push(itemName(menuItemId) ?? 'ประเภทที่เลือก')
+    filterBits.push(itemName(menuItemId) ?? 'เมนูที่เลือก')
     if (optionId !== '') filterBits.push(optionName(optionId) ?? 'ตัวเลือกที่เลือก')
   }
   if (ingredientId !== '') filterBits.push(ingredientName(ingredientId) ?? 'วัตถุดิบที่เลือก')
@@ -680,7 +680,7 @@ export default function ReportPanel() {
                 setOptionId('') // a choice only means something for its type
               }}
             >
-              <option value="">ทุกประเภท</option>
+              <option value="">ทุกเมนู</option>
               {items.map((it) => (
                 <option key={it.id} value={it.id}>
                   {it.name}
