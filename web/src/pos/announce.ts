@@ -13,6 +13,7 @@
 // counter device should speak, not every phone that is logged in.
 
 import { TextToSpeech } from '@capacitor-community/text-to-speech'
+import { playAnnouncement, preloadClips } from './announceClips'
 import { chimePeakGain } from './announceVolume'
 
 const KEY = 'pos.announce'
@@ -77,6 +78,7 @@ export function unlockAudio(): void {
     const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
     if (AC && !ctx) ctx = new AC()
     void ctx?.resume()
+    if (ctx) void preloadClips(ctx) // the word clips the announcement is built from
   } catch {
     /* no Web Audio: speech alone */
   }
@@ -165,6 +167,16 @@ function speak(text: string): void {
   synth.speak(u)
 }
 
+/**
+ * The spoken part: pre-recorded Thai word clips through Web Audio (louder than the speech
+ * engine, which is capped at volume 1.0), falling back to the engine when the clips are
+ * not ready or the amount is out of range.
+ */
+async function announceSpeech(text: string, amountSatang: number, queueNumber: number): Promise<void> {
+  if (ctx && (await playAnnouncement(ctx, amountSatang, queueNumber).catch(() => false))) return
+  speak(text)
+}
+
 /** "60 บาท" / "60 บาท 50 สตางค์" */
 function bahtWords(satang: number): string {
   const b = Math.floor(satang / 100)
@@ -183,7 +195,7 @@ export function announcePaid(paymentId: string, amountSatang: number, queueNumbe
   void wake
     .then(chime)
     .catch(() => undefined)
-    .then(() => speak(text))
+    .then(() => announceSpeech(text, amountSatang, queueNumber))
 }
 
 /** Marks payments as already spoken (e.g. ones confirmed before the page opened). */
@@ -213,5 +225,6 @@ export function speakTest(text: string): void {
 /** Test button: proves sound + Thai voice work on this device. */
 export function testAnnounce(): void {
   unlockAudio()
-  void chime().then(() => speak('เปิดเสียงประกาศเงินเข้าแล้ว'))
+  // demo = a real sample announcement ("ได้รับเงิน 60 บาท คิว 1") through the clip path
+  void chime().then(() => announceSpeech('เปิดเสียงประกาศเงินเข้าแล้ว', 6000, 1))
 }
