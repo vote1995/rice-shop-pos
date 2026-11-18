@@ -34,12 +34,13 @@
 //! - ONE "recovered" message when the check clears after an alert was sent,
 //! - silence when a never-announced failure clears.
 //!
-//! Delivery is the optional secrets `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`
-//! (`env.secret`). Without either, the alert line is `console_log!`'d and
-//! nothing else happens — monitoring must work (and never crash) unconfigured.
-//! With both, one POST to the Telegram bot API sends the text. The token is
-//! part of the request URL and therefore NEVER logged: a send failure is a
-//! static `console_error!` line, nothing more.
+//! Delivery is the optional secret `DISCORD_WEBHOOK_URL` (`env.secret`).
+//! Without it, the alert line is `console_log!`'d and nothing else happens —
+//! monitoring must work (and never crash) unconfigured. With it (checked
+//! against Discord's webhook hosts first), one POST to the webhook sends the
+//! text, truncated to Discord's 2000-character limit. The URL carries the
+//! webhook token and is therefore NEVER logged: an invalid URL or a send
+//! failure is a static `console_error!` line, nothing more.
 //!
 //! NOTE a full D1 outage cannot be announced from here by construction (the
 //! `monitor_state` row can be neither read nor written either) — that case is
@@ -467,33 +468,77 @@ async fn write_heartbeat(env: &Env, now: i64) -> Result<(), ApiError> {
 }
 
 // ---------------------------------------------------------------------------
-// Telegram delivery (optional; must never crash or leak the token)
+// Discord webhook delivery (optional; must never crash or leak the URL)
 // ---------------------------------------------------------------------------
 
-const TELEGRAM_TOKEN_VAR: &str = "TELEGRAM_BOT_TOKEN";
-const TELEGRAM_CHAT_VAR: &str = "TELEGRAM_CHAT_ID";
+const DISCORD_WEBHOOK_VAR: &str = "DISCORD_WEBHOOK_URL";
 
-/// Both Telegram secrets, or `None` when either is absent/empty (monitoring
-/// still runs — the alert just goes to the log instead).
-fn telegram_creds(env: &Env) -> Option<(String, String)> {
-    let token = env.secret(TELEGRAM_TOKEN_VAR).ok()?.to_string();
-    let chat_id = env.secret(TELEGRAM_CHAT_VAR).ok()?.to_string();
-    (!token.trim().is_empty() && !chat_id.trim().is_empty()).then_some((token, chat_id))
+/// The only URL prefixes we ever POST the alert to (Discord's own hosts; the
+/// string after the prefix is the secret webhook token).
+const DISCORD_WEBHOOK_PREFIXES: [&str; 4] = [
+    "https://discord.com/api/webhooks/",
+    "https://discordapp.com/api/webhooks/",
+    "https://ptb.discord.com/api/webhooks/",
+    "https://canary.discord.com/api/webhooks/",
+];
+
+/// Discord rejects a message whose `content` exceeds 2000 CHARACTERS (the
+/// limit counts chars, not bytes — Thai/emoji text is 3–4 bytes per char).
+const DISCORD_CONTENT_MAX_CHARS: usize = 2000;
+
+/// The webhook URL, or `None` when the secret is absent/empty/whitespace
+/// (monitoring still runs — the alert just goes to the log instead).
+fn discord_webhook_url(env: &Env) -> Option<String> {
+    let url = env.secret(DISCORD_WEBHOOK_VAR).ok()?.to_string();
+    let url = url.trim().to_owned();
+    (!url.is_empty()).then_some(url)
 }
 
-/// Send one message. Without the secrets: `console_log!` the alert line and
-/// stop. With them: one POST to the bot API — the token is part of the URL,
-/// so neither it nor the URL is EVER logged; a failure at any step is a
-/// single static `console_error!` line (the next reminder retries anyway).
+/// Is this a Discord webhook URL (after trim)? Pure, so the accepted hosts
+/// are unit-tested: a mistyped or hijacked value must never receive the
+/// alert. Only the yes/no answer is ever logged — never the URL itself.
+fn valid_discord_webhook(url: &str) -> bool {
+    let url = url.trim();
+    DISCORD_WEBHOOK_PREFIXES.iter().any(|p| url.starts_with(p))
+}
+
+/// The `content` field for the webhook body: the text capped at Discord's
+/// 2000 CHARACTERS. Truncates by chars, never bytes, so multi-byte Thai or
+/// emoji text is never split mid-codepoint.
+fn discord_content(text: &str) -> String {
+    if text.chars().count() <= DISCORD_CONTENT_MAX_CHARS {
+        text.to_owned()
+    } else {
+        text.chars().take(DISCORD_CONTENT_MAX_CHARS).collect()
+    }
+}
+
+/// Send one message. Without the secret: `console_log!` the alert line and
+/// stop. With it: one POST to the webhook — the URL embeds the token, so
+/// neither it nor the request/response is EVER logged; an invalid URL or a
+/// failure at any step is a single static `console_error!` line (the next
+/// reminder retries anyway) followed by the log fallback.
 async fn dispatch_alert(env: &Env, text: &str) {
-    let Some((token, chat_id)) = telegram_creds(env) else {
+    let Some(url) = discord_webhook_url(env) else {
         console_log!("monitor alert: {text}");
         return;
     };
-    let body = json!({ "chat_id": chat_id, "text": text }).to_string();
+    if !valid_discord_webhook(&url) {
+        // Never log the URL — it is the operator's input, not a secret-free
+        // string; the static line is all the log gets (plus the alert text).
+        console_error!("monitor: discord webhook url invalid");
+        console_log!("monitor alert: {text}");
+        return;
+    };
+    // allowed_mentions:[] keeps the alert from pinging @everyone/@here.
+    let body = json!({
+        "content": discord_content(text),
+        "allowed_mentions": { "parse": [] },
+    })
+    .to_string();
     let headers = Headers::new();
     if headers.set("Content-Type", "application/json").is_err() {
-        console_error!("monitor: telegram send failed");
+        console_error!("monitor: discord send failed");
         return;
     }
     let mut init = RequestInit::new();
@@ -501,20 +546,19 @@ async fn dispatch_alert(env: &Env, text: &str) {
         .with_headers(headers)
         .with_body(Some(JsValue::from_str(&body)));
     // Never log this URL or the request — both contain the token.
-    let request = Request::new_with_init(
-        &format!("https://api.telegram.org/bot{token}/sendMessage"),
-        &init,
-    );
+    let request = Request::new_with_init(&url, &init);
     let sent = match request {
         Ok(req) => Fetch::Request(req).send().await,
         Err(_) => {
-            console_error!("monitor: telegram send failed");
+            console_error!("monitor: discord send failed");
             return;
         }
     };
     match sent {
+        // Discord answers 204 No Content on success; any 2xx will do, and
+        // the response body is never read or logged.
         Ok(resp) if (200..300).contains(&resp.status_code()) => {}
-        _ => console_error!("monitor: telegram send failed"),
+        _ => console_error!("monitor: discord send failed"),
     }
 }
 
@@ -744,10 +788,58 @@ mod tests {
             reminder_text(CHECK_STUCK_BEAM, "7", 120),
             recovered_text(CHECK_STUCK_BEAM),
         ] {
-            assert!(!text.contains("api.telegram.org"), "{text}");
+            assert!(!text.contains("discord.com"), "{text}");
+            assert!(!text.to_ascii_lowercase().contains("webhooks"), "{text}");
             assert!(!text.to_ascii_lowercase().contains("token"), "{text}");
             assert!(!text.contains("http"), "{text}");
             assert!(!text.contains("chat_id"), "{text}");
         }
+    }
+
+    #[test]
+    fn only_discord_webhook_hosts_are_valid() {
+        // The four official hosts (stable, legacy domain, PTB, canary).
+        for good in [
+            "https://discord.com/api/webhooks/123456/abc-DEF",
+            "https://discordapp.com/api/webhooks/123456/abc-DEF",
+            "https://ptb.discord.com/api/webhooks/123456/abc-DEF",
+            "https://canary.discord.com/api/webhooks/123456/abc-DEF",
+            // Surrounding whitespace is trimmed before validating.
+            " https://discord.com/api/webhooks/123456/abc-DEF\n",
+        ] {
+            assert!(valid_discord_webhook(good), "should accept {good:?}");
+        }
+        // Everything else must be rejected: no token may ever leave for it.
+        for bad in [
+            "",
+            "   ",
+            "https://discord.com/api/webhooks",           // no trailing slash
+            "https://discord.com/api/webhook/123/abc",    // singular path
+            "http://discord.com/api/webhooks/123/abc",    // not https
+            "https://evil.com/api/webhooks/123/abc",      // stranger host
+            "https://discord.com.evil.win/api/webhooks/", // host look-alike
+            "https://example.com/api/webhooks/123/abc",    // stranger host again
+        ] {
+            assert!(!valid_discord_webhook(bad), "should reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn content_is_truncated_to_2000_chars_never_bytes() {
+        // Short and exactly-at-the-limit text passes through untouched.
+        assert_eq!(discord_content("ok"), "ok");
+        let exactly = "a".repeat(DISCORD_CONTENT_MAX_CHARS);
+        assert_eq!(discord_content(&exactly).len(), DISCORD_CONTENT_MAX_CHARS);
+        // Over the limit by chars -> exactly 2000 chars.
+        let over = "a".repeat(DISCORD_CONTENT_MAX_CHARS + 57);
+        let cut = discord_content(&over);
+        assert_eq!(cut.chars().count(), DISCORD_CONTENT_MAX_CHARS);
+        assert!(cut.chars().all(|c| c == 'a'));
+        // Multi-byte text is cut by CHARS: 2500 Thai chars (3 bytes each) —
+        // a byte-wise cut would land mid-codepoint and corrupt the text.
+        let thai = "ก".repeat(2500);
+        let cut = discord_content(&thai);
+        assert_eq!(cut.chars().count(), DISCORD_CONTENT_MAX_CHARS);
+        assert_eq!(cut.len(), DISCORD_CONTENT_MAX_CHARS * 3);
     }
 }
