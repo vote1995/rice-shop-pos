@@ -7,7 +7,7 @@
 //! - [`error`]  — the JSON error type used by every handler
 //! - [`media`]  — R2 menu images + app-enforced free-tier quotas
 //! - [`pricing`] — the pure order-line pricing engine (no D1, no worker types)
-//! - [`monitor`] — cron outage checks + optional Telegram alerts (cron-only)
+//! - [`monitor`] — cron outage checks + optional Discord webhook alerts (cron-only)
 //! - [`cors`]   — opt-in allowlist CORS for the Capacitor Android staff POS
 
 use axum::{

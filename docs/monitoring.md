@@ -1,7 +1,7 @@
 # Outage monitoring (operator guide)
 
 Implements the first two layers of `docs/monitoring-plan.md`: an in-Worker monitor that
-runs inside the existing every-minute cron and alerts through a Telegram bot, plus a
+runs inside the existing every-minute cron and alerts through a Discord webhook, plus a
 `/api/health/deep` endpoint for an external uptime probe.
 
 ## What runs
@@ -28,21 +28,37 @@ No details or error text are returned. The result is cached 30 s per isolate (th
 A full D1 outage cannot be announced from inside the Worker (the state table is down too);
 that is what the external probe is for.
 
-## Telegram setup
+## Discord setup
 
-1. In Telegram open **@BotFather** → `/newbot` → copy the bot token.
-2. Send any message to your new bot (or add it to a group and write there).
-3. Open `https://api.telegram.org/bot<token>/getUpdates` in a browser and read
-   `message.chat.id` (negative for groups).
-4. Store both as prod secrets — run these yourself so the values never go into chat or git:
+1. In Discord, in your server open the target channel → **Edit Channel** (gear) →
+   **Integrations** → **Webhooks** → **New Webhook**, name it e.g. "rice-pos monitor" →
+   **Copy Webhook URL**.
+2. Store it as a prod secret — run this yourself so the value never goes into chat or git:
 
    ```
    cd api
-   npx wrangler secret put TELEGRAM_BOT_TOKEN
-   npx wrangler secret put TELEGRAM_CHAT_ID
+   npx wrangler secret put DISCORD_WEBHOOK_URL
    ```
 
-Until both exist, alerts are only written to the Worker log (`monitor alert: ...`).
+3. Optional test from a terminal (expect HTTP `204`):
+
+   ```
+   curl -H "Content-Type: application/json" \
+        -d '{"content":"test"}' \
+        "<webhook url>"
+   ```
+
+4. Remove the old Telegram secrets if they exist (`npx wrangler secret list` shows them):
+
+   ```
+   npx wrangler secret delete TELEGRAM_BOT_TOKEN
+   npx wrangler secret delete TELEGRAM_CHAT_ID
+   ```
+
+Until the secret exists, alerts are only written to the Worker log (`monitor alert: ...`).
+
+Treat the webhook URL like a password: if it leaks, delete the webhook in Discord and
+create a new one.
 
 ## External probe (covers "Cloudflare / the Worker itself is down")
 
@@ -51,7 +67,7 @@ Create two monitors in UptimeRobot / Better Stack (free tier), every 1–5 minut
 - `https://pos.twostackmaxgame.win/api/health` — expect 200
 - `https://pos.twostackmaxgame.win/api/health/deep` — expect 200
 
-Point their alert contacts at your email and a Telegram integration.
+Point their alert contacts at your email and a Discord webhook integration.
 
 ## Not covered yet
 
