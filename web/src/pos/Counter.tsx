@@ -85,7 +85,10 @@ const MENU_PERIOD_MS = 10 * 60_000
 const MAX_LINES = 50
 const DRAFTS_KEY = 'pos.drafts'
 const CHANNEL_KEY = 'pos.channel'
-const LONG_PRESS_MS = 550
+/** How long a finger must hold a menu/choice card before the sold-out toggle
+ *  fires. 1 s (plus the confirm sheet for CLOSING sales) so a rest while
+ *  scrolling never flips a row to ของหมด by accident. */
+const LONG_PRESS_MS = 1000
 
 const BANGKOK_OFFSET_MS = 7 * 60 * 60 * 1000
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -318,7 +321,8 @@ const S = {
 }
 
 // ---------------------------------------------------------------------------
-// Long-press button: tap = pick, press-and-hold = toggle sold-out
+// Long-press button: tap = pick, press-and-hold (1 s, see LONG_PRESS_MS) =
+// toggle sold-out
 // ---------------------------------------------------------------------------
 
 function LongPressButton({
@@ -427,6 +431,12 @@ export default function Counter({
   const [payResult, setPayResult] = useState<PayResult | null>(null)
   const [cancelFor, setCancelFor] = useState<Order | null>(null)
   const [addTo, setAddTo] = useState<Order | null>(null)
+  /** Long-press sold-out guard: CLOSING sales (sold_out === false) waits for
+   *  the SoldOutConfirmSheet below before it hits the API; reopening an
+   *  already-closed row stays a one-gesture toggle. */
+  const [soldOutAsk, setSoldOutAsk] = useState<
+    { kind: 'item'; item: MenuItem } | { kind: 'option'; opt: MenuOption } | null
+  >(null)
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState<ToastState | null>(null)
@@ -1083,6 +1093,28 @@ export default function Counter({
     }
   }
 
+  /** Long-press gate for an item: reopening toggles at once, closing asks
+   *  first (see SoldOutConfirmSheet). */
+  function askItemSoldOut(item: MenuItem) {
+    if (item.sold_out) void toggleItemSoldOut(item)
+    else setSoldOutAsk({ kind: 'item', item })
+  }
+
+  /** Long-press gate for an option: same rule as askItemSoldOut. */
+  function askOptionSoldOut(opt: MenuOption) {
+    if (opt.sold_out) void toggleOptionSoldOut(opt)
+    else setSoldOutAsk({ kind: 'option', opt })
+  }
+
+  /** The sheet's "ยืนยัน ของหมด": close it, then run the real toggle. */
+  function confirmSoldOut() {
+    const ask = soldOutAsk
+    if (!ask) return
+    setSoldOutAsk(null)
+    if (ask.kind === 'item') void toggleItemSoldOut(ask.item)
+    else void toggleOptionSoldOut(ask.opt)
+  }
+
   // ---- submit / add-to / queue actions -----------------------------------
 
   function lineBodies() {
@@ -1553,6 +1585,15 @@ export default function Counter({
         />
       ) : null}
 
+      {soldOutAsk ? (
+        <SoldOutConfirmSheet
+          name={soldOutAsk.kind === 'item' ? soldOutAsk.item.name : soldOutAsk.opt.name}
+          busy={busy}
+          onClose={() => setSoldOutAsk(null)}
+          onConfirm={confirmSoldOut}
+        />
+      ) : null}
+
       {toast ? (
         <div
           role="status"
@@ -1777,7 +1818,7 @@ export default function Counter({
                           className={`pos-dd-opt${type?.id === it.id ? ' on' : ''}${
                             it.sold_out ? ' soldout' : ''
                           }`}
-                          onLong={() => void toggleItemSoldOut(it)}
+                          onLong={() => askItemSoldOut(it)}
                           onTap={() => {
                             tapType(it)
                             setDdOpen(null)
@@ -1793,7 +1834,7 @@ export default function Counter({
                         </LongPressButton>
                       ))}
                     </div>
-                    <p className="pos-dd-foot">กดค้างที่เมนูเพื่อตั้ง/ยกเลิก ของหมด</p>
+                    <p className="pos-dd-foot">กดค้าง 1 วินาทีที่เมนูเพื่อตั้ง/ยกเลิก ของหมด</p>
                   </div>
                 ) : null}
               </div>
@@ -1855,7 +1896,7 @@ export default function Counter({
       <LongPressButton
         key={o.id}
         className={`pos-choice${on || inCart > 0 ? ' on' : ''}${o.sold_out ? ' soldout' : ''}`}
-        onLong={() => void toggleOptionSoldOut(o)}
+        onLong={() => askOptionSoldOut(o)}
         onTap={() => (quick ? tapQuickOption(type, o) : tapOption(g, o))}
       >
         <span className="pos-choice-name">
@@ -3093,6 +3134,50 @@ function CancelSheet({
         )}
         <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>
           ไม่ยกเลิก
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Sold-out confirm sheet: CLOSING sales is the destructive half of the
+// long-press toggle, so it gets one explicit "yes" before the API call.
+// ---------------------------------------------------------------------------
+
+function SoldOutConfirmSheet({
+  name,
+  onConfirm,
+  onClose,
+  busy,
+}: {
+  name: string
+  onConfirm: () => void
+  onClose: () => void
+  busy: boolean
+}) {
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div
+        className="sheet"
+        role="dialog"
+        aria-label="ยืนยันของหมด"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2>ยืนยันของหมด</h2>
+        <p className="muted small" style={{ margin: 0 }}>
+          ปิดขาย &quot;{name}&quot;? ลูกค้าจะสั่งรายการนี้ไม่ได้จนกว่าจะกดค้างเพื่อเปิดขายอีกครั้ง
+        </p>
+        <button
+          type="button"
+          style={S.bigBtn(RED, 'var(--danger-contrast)', RED)}
+          disabled={busy}
+          onClick={onConfirm}
+        >
+          ยืนยัน ของหมด
+        </button>
+        <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>
+          ยกเลิก
         </button>
       </div>
     </div>
