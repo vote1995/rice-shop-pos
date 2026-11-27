@@ -3,13 +3,15 @@
 //! Endpoints (all JSON, ids are client-generated UUIDs, FEATURES 3.70):
 //! - `GET    /owner/shops/{shop_id}/menu`   whole menu of one shop (all statuses)
 //! - `POST   /owner/menu-items`             create item (idempotent by id)
-//! - `PUT    /owner/menu-items/{id}`        full replace; NO delete route (order_items reference items)
+//! - `PUT    /owner/menu-items/{id}`        replace fields (sold_out optional:
+//!   omitted = keep the stored value); NO delete route (order_items reference items)
 //! - `POST   /owner/menu-items/reorder`     bulk category + sort_order in one batch
 //! - `POST   /owner/option-groups`          create group (idempotent by id)
 //! - `PUT    /owner/option-groups/{id}`     replace name/policy/sort
 //! - `DELETE /owner/option-groups/{id}`     group + its options in one batch
 //! - `POST   /owner/options`                create option (idempotent by id; shop_id from the group)
-//! - `PUT    /owner/options/{id}`           replace name/price/sort/sold_out
+//! - `PUT    /owner/options/{id}`           replace name/price/sort (sold_out
+//!   optional: omitted = keep the stored value)
 //! - `DELETE /owner/options/{id}`
 //! - `PUT    /owner/shops/{shop_id}/channel-markup`  delivery markup (3.6)
 //!
@@ -146,7 +148,12 @@ pub struct UpdateMenuItemBody {
     pub cost: Option<i64>,
     pub sort_order: Option<i64>,
     pub status: String,
-    pub sold_out: bool,
+    /// Omitted = keep the stored value. `sold_out` is owned by the counter's
+    /// sold-out endpoints, so the owner PUT must not echo back a stale flag
+    /// loaded before the counter toggled it. `deny_unknown_fields` stays on:
+    /// old clients that still send the field keep working.
+    #[serde(default)]
+    pub sold_out: Option<bool>,
 }
 
 /// `POST /owner/menu-items/reorder`: one row per menu item to move.
@@ -209,7 +216,10 @@ pub struct UpdateOptionBody {
     pub name: String,
     pub price_add: i64,
     pub sort_order: Option<i64>,
-    pub sold_out: bool,
+    /// Omitted = keep the stored value (the counter's sold-out toggle owns
+    /// this flag, FEATURES 3.5). Sending it explicitly still works.
+    #[serde(default)]
+    pub sold_out: Option<bool>,
 }
 
 /// One channel markup rule (FEATURES 3.6). `baht` value is satang per plate,
@@ -699,8 +709,12 @@ pub async fn create_menu_item(
 }
 
 /// Full replace of the mutable menu-item fields. id/shop_id are immutable
-/// (not accepted in the body). No DELETE route exists: order_items reference
-/// menu items forever (append-only, schema 0001).
+/// (not accepted in the body). `sold_out` is the one exception: it is owned
+/// by the counter's sold-out endpoints, so the body may omit it and an
+/// omitted flag keeps the stored value - a PUT from a stale owner page then
+/// can never resurrect a sold-out state the counter just cleared. No DELETE
+/// route exists: order_items reference menu items forever (append-only,
+/// schema 0001).
 #[worker::send]
 pub async fn update_menu_item(
     State(state): State<AppState>,
@@ -729,6 +743,9 @@ pub async fn update_menu_item(
     }
 
     let now = now_ms();
+    // `..existing` below moves the row, so resolve the flag first: an omitted
+    // body field keeps whatever the counter last toggled.
+    let sold_out = body.sold_out.unwrap_or(existing.sold_out);
     let item = MenuItem {
         name,
         category,
@@ -740,7 +757,7 @@ pub async fn update_menu_item(
         lineman_price: body.lineman_price,
         foodpanda_price: body.foodpanda_price,
         cost: body.cost,
-        sold_out: body.sold_out,
+        sold_out,
         status: body.status.clone(),
         sort_order: body.sort_order.unwrap_or(0),
         updated_at: now,
@@ -1125,8 +1142,11 @@ pub async fn create_option(
     Ok((StatusCode::CREATED, Json(option)).into_response())
 }
 
-/// Replace name/price_add/sort_order/sold_out (the curry-pot sold-out toggle,
-/// FEATURES 3.5). option_group_id and shop_id are immutable.
+/// Replace name/price_add/sort_order. `sold_out` (the curry-pot sold-out
+/// toggle, FEATURES 3.5) is optional: omitted keeps the stored value, because
+/// the counter's sold-out endpoints own that flag and a PUT from a stale
+/// owner page must never overwrite it. option_group_id and shop_id are
+/// immutable (not accepted in the body).
 #[worker::send]
 pub async fn update_option(
     State(state): State<AppState>,
@@ -1142,10 +1162,13 @@ pub async fn update_option(
     let existing = load_option(env, &id).await?.ok_or(ApiError::NotFound)?;
 
     let now = now_ms();
+    // `..existing` below moves the row, so resolve the flag first: an omitted
+    // body field keeps whatever the counter last toggled.
+    let sold_out = body.sold_out.unwrap_or(existing.sold_out);
     let option = MenuOption {
         name,
         price_add: body.price_add,
-        sold_out: body.sold_out,
+        sold_out,
         sort_order: body.sort_order.unwrap_or(0),
         updated_at: now,
         ..existing
@@ -1459,6 +1482,71 @@ mod tests {
             foodpanda: None,
         };
         assert_eq!(normalize_channel_markup(&empty).unwrap(), json!({}));
+    }
+
+    #[test]
+    fn update_bodies_treat_sold_out_as_optional() {
+        // The owner editor no longer sends sold_out (the counter owns that
+        // flag): an omitted field deserializes as None = keep the stored value.
+        let item: UpdateMenuItemBody = serde_json::from_value(json!({
+            "name": "ก๋วยเตี๋ยว",
+            "category": "ก๋วยเตี๋ยว",
+            "menu_type": "made_to_order",
+            "base_price": 4000,
+            "price_2": null,
+            "price_3": null,
+            "grab_price": null,
+            "lineman_price": null,
+            "foodpanda_price": null,
+            "cost": null,
+            "sort_order": 10,
+            "status": "active",
+        }))
+        .unwrap();
+        assert_eq!(item.sold_out, None);
+
+        // Old clients that still send the field keep working (Some = set it).
+        let old: UpdateMenuItemBody = serde_json::from_value(json!({
+            "name": "ก๋วยเตี๋ยว",
+            "category": "ก๋วยเตี๋ยว",
+            "menu_type": "made_to_order",
+            "base_price": 4000,
+            "price_2": null,
+            "price_3": null,
+            "grab_price": null,
+            "lineman_price": null,
+            "foodpanda_price": null,
+            "cost": null,
+            "sort_order": 10,
+            "status": "active",
+            "sold_out": true,
+        }))
+        .unwrap();
+        assert_eq!(old.sold_out, Some(true));
+
+        let opt: UpdateOptionBody = serde_json::from_value(json!({
+            "name": "เพิ่มไข่",
+            "price_add": 1000,
+            "sort_order": 1,
+        }))
+        .unwrap();
+        assert_eq!(opt.sold_out, None);
+        let opt: UpdateOptionBody = serde_json::from_value(json!({
+            "name": "เพิ่มไข่",
+            "price_add": 1000,
+            "sort_order": 1,
+            "sold_out": false,
+        }))
+        .unwrap();
+        assert_eq!(opt.sold_out, Some(false));
+
+        // deny_unknown_fields is still in force: junk keys are still rejected.
+        assert!(serde_json::from_value::<UpdateOptionBody>(json!({
+            "name": "เพิ่มไข่",
+            "price_add": 1000,
+            "junk": 1,
+        }))
+        .is_err());
     }
 }
 

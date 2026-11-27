@@ -99,8 +99,12 @@ function markupFormFrom(data: MenuData | null): MarkupFormState {
   }
 }
 
-// PUT /api/owner/menu-items/{id} replaces ALL mutable fields — build the full
-// body from the current row and override only what this screen edits.
+// PUT /api/owner/menu-items/{id} replaces all mutable fields except sold_out —
+// build the full body from the current row and override only what this screen
+// edits. sold_out is owned by the counter's long-press toggle, so it is left
+// out on purpose: sending the value this page loaded would resurrect a
+// sold-out flag the counter just cleared (stale overwrite). The server keeps
+// the row's value and returns it, and upsertItem() patches it back in.
 /** The หมวด (type) a menu is grouped under (owner side only). A menu that was never
  *  given one is its own หมวด: the menu's name stands in for it. */
 function catOf(it: MenuItem): string {
@@ -128,7 +132,6 @@ function itemPutBody(it: MenuItem, over: Record<string, unknown>): Record<string
     cost: it.cost,
     sort_order: it.sort_order,
     status: it.status,
-    sold_out: it.sold_out,
     ...over,
   }
 }
@@ -589,12 +592,14 @@ export default function MenuEditor() {
 
   async function saveOptionFields(o: MenuOption, patch: { name?: string; price_add?: number }): Promise<boolean> {
     try {
+      // sold_out is deliberately not sent: the counter's sold-out toggle owns
+      // it, and the value this page loaded may be stale (the server keeps the
+      // row's value and returns it, so upsertOption() stays in sync).
       upsertOption(
         await api<MenuOption>('PUT', `/api/owner/options/${encodeURIComponent(o.id)}`, {
           name: patch.name ?? o.name,
           price_add: patch.price_add ?? o.price_add,
           sort_order: o.sort_order,
-          sold_out: o.sold_out,
         }),
       )
       flash('บันทึกแล้ว')
